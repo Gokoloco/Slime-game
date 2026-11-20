@@ -1,6 +1,6 @@
 # STUDIO NOTES: Slime (Game 2, working name)
 
-Repo: Gokoloco/Slime-game. Last updated: 20 Nov 2026.
+Repo: Gokoloco/Slime-game. Last updated: 20 Nov 2026 (prototype v0.1, not published).
 
 ## What it is
 Mobile-first slime-making mini-game. Two modes chosen at start:
@@ -16,9 +16,18 @@ Full design lives in the Game Studio HQ project: BRIEF_Slime, RESEARCH_Slime_Sat
 - Effects are gentle, no rapid flashing, "reduce effects" toggle.
 
 ## Numbers (to tune in playtests)
-- Round length: TBD
-- Time bonus per glitter: +3 s
-- Slowdown per repeated move: TBD
+- Round length: 45 s, max 60 s. Low-time effects start at 10 s. Idle pause after 6 s without touch.
+- Glitter: every 5th different move in a row gives +50 points and +3 s. Finishing a slime: +100 and +3 s.
+- Repeating a move: speed 1 - 0.25 per repeat (floor 0.25). Switching: speed 1 + 0.1 per switch (cap 1.5). Score multiplier 1 + 0.25 per switch (cap x3).
+- Progress per move: 3.2 x speed. Phase 2 at 33, phase 3 at 66, ready at 100.
+
+## Status (v0.1 prototype)
+Done: slime body (soft-body, stable at 30 and 60 fps), 3 phases with different look, touch/stretch/snap, circle and up-down gestures, mix-speed meter, Chill (6 colors) and Challenge modes, glitter, tilt and buzz at low time, effects and sound toggles, synthesized sounds (original, no licence needed), idle pause.
+Not done: leaderboard, nickname, share button, real art/stones/add-ins, unlock progression, long gluey strings when stretching, privacy page.
+
+## Tests
+`python3 tests/test_slime.py` (needs Playwright + Chrome). 20 headless checks: gestures with simulated pointer input, variety rule, phases, glitter, timer, tilt, idle pause, console errors.
+NOT tested: real phone touch feel, gesture accuracy on real fingers, sound on real devices, iOS Safari, performance on low-end phones.
 
 ## Conventions
 Single `docs/index.html`, assets in `docs/assets`, hosted free first (GitHub Pages). Own Supabase table for leaderboard, no accounts, filtered nicknames, no ads/analytics.

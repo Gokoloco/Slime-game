@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#2a1f4d">
+<title>Slime (prototype)</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
+  html,body{margin:0;height:100%;overflow:hidden;background:#2a1f4d;font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;color:#fff;touch-action:none}
+  #stage{position:fixed;inset:0;background:radial-gradient(120% 90% at 50% 20%,#5b3f9e 0%,#3a2a73 45%,#241a4a 100%);transform-origin:50% 50%}
+  canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+  .hud{position:absolute;left:0;right:0;top:0;padding:max(env(safe-area-inset-top),10px) 14px 0;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none}
+  .pill{background:rgba(255,255,255,.14);border-radius:18px;padding:6px 14px;font-weight:700;font-size:18px;backdrop-filter:blur(4px)}
+  .pill small{display:block;font-size:11px;opacity:.75;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+  #time.low{color:#ff9db1;animation:pulse .5s infinite alternate}
+  @keyframes pulse{from{transform:scale(1)}to{transform:scale(1.12)}}
+  .meters{position:absolute;left:14px;right:14px;bottom:max(env(safe-area-inset-bottom),14px);pointer-events:none}
+  .row{display:flex;align-items:center;gap:10px;margin-top:8px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+  .row span{width:86px;opacity:.85}
+  .bar{flex:1;height:14px;border-radius:9px;background:rgba(255,255,255,.16);overflow:hidden}
+  .fill{height:100%;width:0;border-radius:9px;transition:width .15s}
+  #speedFill{background:linear-gradient(90deg,#ff8aa8,#ffd36e,#7dffb1)}
+  #progFill{background:linear-gradient(90deg,#9ad1ff,#c59bff,#ff9be0)}
+  #phaseLabel{text-align:center;font-weight:700;font-size:15px;opacity:.9;margin-bottom:2px;text-transform:none;letter-spacing:0}
+  #moveBadge{position:absolute;left:50%;top:15%;transform:translate(-50%,0);font-size:34px;font-weight:800;opacity:0;pointer-events:none;text-shadow:0 2px 10px rgba(0,0,0,.35)}
+  #moveBadge.pop{animation:pop .6s ease-out}
+  @keyframes pop{0%{opacity:0;transform:translate(-50%,10px) scale(.7)}25%{opacity:1;transform:translate(-50%,0) scale(1.1)}100%{opacity:0;transform:translate(-50%,-30px) scale(1)}}
+  #toast{position:absolute;left:50%;top:22%;transform:translateX(-50%);font-size:26px;font-weight:800;text-align:center;opacity:0;pointer-events:none;text-shadow:0 2px 12px rgba(0,0,0,.4)}
+  #toast.show{animation:toast 1.4s ease-out}
+  @keyframes toast{0%{opacity:0;transform:translateX(-50%) scale(.6)}20%{opacity:1;transform:translateX(-50%) scale(1.08)}80%{opacity:1}100%{opacity:0;transform:translateX(-50%) scale(1)}}
+  .overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(36,26,74,.82);text-align:center;padding:24px}
+  .hidden{display:none!important}
+  h1{margin:0;font-size:56px;letter-spacing:.02em;text-shadow:0 4px 0 #6f4fc4}
+  p.sub{margin:0 0 8px;opacity:.85;max-width:320px;line-height:1.35}
+  button{font:inherit;font-weight:800;border:0;border-radius:22px;padding:14px 28px;font-size:20px;color:#fff;cursor:pointer;min-width:230px;box-shadow:0 5px 0 rgba(0,0,0,.25)}
+  button:active{transform:translateY(3px);box-shadow:0 2px 0 rgba(0,0,0,.25)}
+  .b-chill{background:#4ac7a5}.b-chal{background:#ff6f91}.b-alt{background:#7c5cd6}
+  .tools{position:absolute;right:12px;top:max(env(safe-area-inset-top),10px);display:flex;gap:8px;pointer-events:auto;margin-top:56px}
+  .tool{min-width:0;padding:6px 12px;font-size:14px;border-radius:14px;background:rgba(255,255,255,.18);box-shadow:none;opacity:.9}
+  .tool.off{opacity:.45}
+  #swatches{position:absolute;left:0;right:0;bottom:calc(max(env(safe-area-inset-bottom),14px) + 82px);display:flex;justify-content:center;gap:10px}
+  .sw{width:34px;height:34px;border-radius:50%;border:3px solid rgba(255,255,255,.5);box-shadow:0 2px 0 rgba(0,0,0,.25);cursor:pointer}
+  .sw.sel{border-color:#fff;transform:scale(1.15)}
+  .final{font-size:46px;font-weight:800}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="cv"></canvas>
+
+  <div class="hud" id="hud">
+    <div class="pill"><small>Score</small><span id="score">0</span></div>
+    <div class="pill" id="timePill"><small>Time</small><span id="time">45</span></div>
+  </div>
+  <div class="tools" id="tools">
+    <button class="tool" id="btnFx">Effects: on</button>
+    <button class="tool" id="btnSnd">Sound: on</button>
+  </div>
+
+  <div id="moveBadge"></div>
+  <div id="toast"></div>
+  <div id="swatches" class="hidden"></div>
+
+  <div class="meters" id="meters">
+    <div id="phaseLabel">Phase 1: Gluey</div>
+    <div class="row"><span>Mix speed</span><div class="bar"><div class="fill" id="speedFill"></div></div></div>
+    <div class="row"><span>Slime ready</span><div class="bar"><div class="fill" id="progFill"></div></div></div>
+  </div>
+
+  <div class="overlay" id="menu">
+    <h1>Slime</h1>
+    <p class="sub">Mix it, stretch it, make it perfect. Use your finger: circles left and right, and up and down. Mix it up for speed!</p>
+    <button class="b-chill" id="goChill">Chill mode</button>
+    <button class="b-chal" id="goChal">Challenge mode</button>
+    <p class="sub" style="font-size:12px;opacity:.6">Prototype. Names and art are placeholders.</p>
+  </div>
+
+  <div class="overlay hidden" id="endScreen">
+    <div style="opacity:.8;font-weight:700">Time's up!</div>
+    <div class="final" id="finalScore">0</div>
+    <p class="sub" id="finalInfo"></p>
+    <button class="b-chal" id="again">Play again</button>
+    <button class="b-alt" id="toMenu">Menu</button>
+  </div>
+
+  <div class="overlay hidden" id="idle" style="background:rgba(36,26,74,.6)">
+    <div style="font-size:28px;font-weight:800">Paused</div>
+    <p class="sub">Touch the slime to keep going</p>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const TAU = Math.PI * 2;
+  const $ = id => document.getElementById(id);
+  const cv = $('cv'), ctx2d = cv.getContext('2d');
+  const stage = $('stage');
+  // tilt shakes the play area only; the effects/sound buttons stay still so they are always easy to tap
+  const tiltEls = [cv, $('hud'), $('meters')];
+  function setTilt(v) { tiltEls.forEach(el => { el.style.transform = v; }); }
+
+  /* ---------- constants (tune in playtests) ---------- */
+  const START_TIME = 45, MAX_TIME = 60, GLITTER_BONUS_TIME = 3, LOW_TIME = 10, IDLE_PAUSE = 6;
+  const N = 72;                       // points around the slime
+  const PHASE_NAMES = ['', 'Phase 1: Gluey', 'Phase 2: Stringy', 'Phase 3: Smooth'];
+  const SWATCHES = [
+    ['Pink',  '#ff7eb6'], ['Sky', '#6ec6ff'], ['Lilac', '#b69cff'],
+    ['Mint',  '#6fe3b8'], ['Sunny', '#ffd95e'], ['Milk', '#f3eefc']
+  ];
+
+  /* ---------- state ---------- */
+  const S = {
+    mode: 'menu', paused: false, t: START_TIME, score: 0, progress: 0, phase: 1,
+    lastMove: null, repeat: 0, switchStreak: 0, speed: 1, lastMoveAt: 0,
+    glitter: false, slimes: 0, color: 0, fx: true, snd: true, lastInput: 0,
+    done: false, mixes: 0, bestCombo: 0
+  };
+  let W = 0, H = 0, R = 100, home = { x: 0, y: 0 }, c = { x: 0, y: 0 };
+  const off = new Float32Array(N), vel = new Float32Array(N), accBuf = new Float32Array(N);
+  const ang = Array.from({ length: N }, (_, i) => i / N * TAU);
+  let grab = null;                   // {id}
+  let finger = { x: 0, y: 0 };
+  let particles = [], sparkles = [], bubbles = [];
+
+  /* ---------- audio (synthesized, original) ---------- */
+  let ac = null, noiseBuf = null, stretchSrc = null, stretchGain = null, stretchFilt = null;
+  function audioInit() {
+    if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+    try {
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    } catch (e) { ac = null; }
+  }
+  function noiseBurst(freq0, freq1, dur, vol, type, q) {
+    if (!ac || !S.snd) return;
+    const src = ac.createBufferSource(); src.buffer = noiseBuf;
+    const f = ac.createBiquadFilter(); f.type = type || 'bandpass'; f.Q.value = q || 3;
+    const g = ac.createGain(), t0 = ac.currentTime;
+    f.frequency.setValueAtTime(freq0, t0); f.frequency.exponentialRampToValueAtTime(Math.max(40, freq1), t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + dur * 0.15);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(f); f.connect(g); g.connect(ac.destination);
+    src.start(t0, Math.random() * 0.5); src.stop(t0 + dur + 0.02);
+  }
+  function sndSquish(speed) {
+    const base = S.phase === 1 ? 260 : S.phase === 2 ? 380 : 520;
+    noiseBurst(base * (0.8 + speed * 0.5), base * 0.35, 0.16 + (S.phase === 1 ? 0.08 : 0), 0.22, 'bandpass', 4);
+  }
+  function sndSnap() { noiseBurst(2600, 900, 0.05, 0.25, 'highpass', 1); }
+  function sndChime(notes) {
+    if (!ac || !S.snd) return;
+    notes.forEach((n, i) => {
+      const o = ac.createOscillator(), g = ac.createGain(), t0 = ac.currentTime + i * 0.09;
+      o.type = 'triangle'; o.frequency.value = n;
+      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.12, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.45);
+      o.connect(g); g.connect(ac.destination); o.start(t0); o.stop(t0 + 0.5);
+    });
+  }
+  function sndBuzz() {
+    if (!ac || !S.snd) return;
+    const o = ac.createOscillator(), g = ac.createGain(), t0 = ac.currentTime;
+    o.type = 'square'; o.frequency.value = 70;
+    g.gain.setValueAtTime(0.05, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.14);
+    o.connect(g); g.connect(ac.destination); o.start(t0); o.stop(t0 + 0.15);
+  }
+  function stretchStart() {
+    if (!ac || !S.snd || stretchSrc) return;
+    stretchSrc = ac.createBufferSource(); stretchSrc.buffer = noiseBuf; stretchSrc.loop = true;
+    stretchFilt = ac.createBiquadFilter(); stretchFilt.type = 'lowpass'; stretchFilt.frequency.value = 300;
+    stretchGain = ac.createGain(); stretchGain.gain.value = 0;
+    stretchSrc.connect(stretchFilt); stretchFilt.connect(stretchGain); stretchGain.connect(ac.destination);
+    stretchSrc.start();
+  }
+  function stretchUpdate(amount) {
+    if (!stretchSrc) return;
+    stretchGain.gain.setTargetAtTime(Math.min(0.12, amount * 0.14), ac.currentTime, 0.03);
+    stretchFilt.frequency.setTargetAtTime(180 + amount * 700, ac.currentTime, 0.03);
+  }
+  function stretchStop() {
+    if (!stretchSrc) return;
+    try { stretchSrc.stop(); } catch (e) {}
+    stretchSrc = null;
+  }
+
+  /* ---------- layout ---------- */
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+    R = Math.min(W * 0.34, H * 0.22);
+    home = { x: W / 2, y: H * 0.46 };
+    if (!c.x) c = { x: home.x, y: home.y };
+  }
+  window.addEventListener('resize', resize);
+
+  /* ---------- helpers ---------- */
+  const wrap = a => { while (a > Math.PI) a -= TAU; while (a < -Math.PI) a += TAU; return a; };
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  function hexToRgb(h) { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; }
+  function mix(a, b, t) { return a.map((v, i) => Math.round(v + (b[i] - v) * t)); }
+  const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
+  const rgba = (a, al) => `rgba(${a[0]},${a[1]},${a[2]},${al})`;
+
+  /* ---------- gesture detection ---------- */
+  const G = { lastAng: null, acc: 0, vDir: 0, vStart: 0, vExtreme: 0, vMinX: 0, vMaxX: 0, strokes: 0, lastCircleAt: 0, lastY: 0 };
+  function gReset() { G.lastAng = null; G.acc = 0; G.vDir = 0; G.strokes = 0; }
+  function gMove(x, y, now) {
+    const dx = x - home.x, dy = y - home.y, d = Math.hypot(dx, dy);
+    // circles
+    if (d > R * 0.15 && d < R * 2.1) {
+      const a = Math.atan2(dy, dx);
+      if (G.lastAng !== null) {
+        const da = wrap(a - G.lastAng);
+        if (Math.sign(da) !== Math.sign(G.acc) && G.acc !== 0 && Math.abs(da) > 0.02) G.acc = 0;
+        G.acc += da;
+        if (Math.abs(G.acc) >= TAU * 0.7) {
+          registerMove(G.acc > 0 ? 'R' : 'L'); // positive angle in screen coords = clockwise
+          G.acc = 0; G.lastCircleAt = now;
+        }
+      }
+      G.lastAng = a;
+    } else { G.lastAng = null; G.acc = 0; }
+    // vertical strokes (up-down), ignored right after a circle
+    const dyStep = y - G.lastY; G.lastY = y;
+    if (Math.abs(dyStep) < 0.5) return;
+    const dir = Math.sign(dyStep);
+    if (G.vDir === 0) { G.vDir = dir; G.vStart = y; G.vExtreme = y; G.vMinX = G.vMaxX = x; G.vCounted = false; return; }
+    if (dir === G.vDir) {
+      G.vExtreme = y; G.vMinX = Math.min(G.vMinX, x); G.vMaxX = Math.max(G.vMaxX, x);
+      const travel = Math.abs(G.vExtreme - G.vStart), width = G.vMaxX - G.vMinX;
+      // a stroke counts as soon as it is long and straight enough; two strokes (down + up) = one up-down move
+      if (!G.vCounted && travel > R * 0.55) {
+        G.vCounted = true;
+        if (width < travel * 0.7) {
+          G.strokes++;
+          if (G.strokes % 2 === 0 && now - G.lastCircleAt > 500) registerMove('V');
+        } else G.strokes = 0;
+      }
+    } else {
+      if (!G.vCounted) G.strokes = 0;          // reversal before a full stroke: just jitter
+      G.vDir = dir; G.vStart = G.vExtreme; G.vExtreme = y; G.vMinX = G.vMaxX = x; G.vCounted = false;
+    }
+  }
+
+  /* ---------- game logic ---------- */
+  const MOVE_LABEL = { R: '↻ Right', L: '↺ Left', V: '↕ Up-down' };
+  function registerMove(type) {
+    if (S.mode !== 'chill' && S.mode !== 'challenge') return;
+    if (S.paused || S.t <= 0) return;
+    const now = performance.now();
+    if (type === S.lastMove) { S.repeat++; S.switchStreak = 0; }
+    else { S.repeat = 0; S.switchStreak = S.lastMove ? S.switchStreak + 1 : 0; }
+    S.lastMove = type; S.lastMoveAt = now; S.mixes++;
+    S.speed = S.repeat === 0 ? Math.min(1.5, 1 + 0.1 * S.switchStreak) : Math.max(0.25, 1 - 0.25 * S.repeat);
+    S.bestCombo = Math.max(S.bestCombo, S.switchStreak);
+    const mult = 1 + 0.25 * Math.min(S.switchStreak, 8);
+    const pts = Math.round(10 * S.speed * mult);
+    if (S.mode === 'challenge') S.score += pts;
+    sndSquish(S.speed);
+    // slime reacts: kick a ripple through the points
+    const kick = (S.speed > 0.6 ? 4.5 : 2) * (S.fx ? 1 : 0.4);
+    const ph = Math.random() * TAU;
+    for (let i = 0; i < N; i++) vel[i] += (type === 'V' ? -0.5 + Math.sin(ang[i] * 2 + ph) * 0.4 : Math.sin(ang[i] * 2 + ph)) * kick;
+    popBadge(`${MOVE_LABEL[type]}${S.mode === 'challenge' ? ' +' + pts : ''}${S.switchStreak >= 2 ? '  x' + mult.toFixed(2) : ''}`, S.repeat > 1);
+    // progress
+    if (S.progress < 100) {
+      S.progress = Math.min(100, S.progress + 3.2 * S.speed);
+      const ph = S.progress >= 66 ? 3 : S.progress >= 33 ? 2 : 1;
+      if (ph !== S.phase) { S.phase = ph; sndChime(ph === 2 ? [523, 659] : [523, 659, 784]); toast(PHASE_NAMES[ph]); }
+      if (S.progress >= 100) slimeReady();
+    }
+    // glitter: 5 different moves in a row
+    if (S.switchStreak > 0 && S.switchStreak % 5 === 0) glitterUnlock();
+  }
+  function glitterUnlock() {
+    S.glitter = true;
+    burst(home.x, home.y, 46, true);
+    sndChime([784, 988, 1175, 1568]);
+    if (S.mode === 'challenge') {
+      S.score += 50; S.t = Math.min(MAX_TIME, S.t + GLITTER_BONUS_TIME);
+      toast(`Glitter! +50  +${GLITTER_BONUS_TIME}s`);
+    } else toast('Glitter!');
+  }
+  function slimeReady() {
+    burst(home.x, home.y, 60, true);
+    sndChime([523, 659, 784, 1047]);
+    if (S.mode === 'challenge') {
+      S.score += 100; S.t = Math.min(MAX_TIME, S.t + GLITTER_BONUS_TIME); S.slimes++;
+      toast('Slime ready! +100');
+      setTimeout(newSlime, 900);
+    } else toast('Your slime is ready!');
+  }
+  function newSlime() {
+    S.progress = 0; S.phase = 1; S.lastMove = null; S.repeat = 0; S.switchStreak = 0; S.speed = 1; S.glitter = false;
+    S.color = (S.color + 1 + Math.floor(Math.random() * 4)) % SWATCHES.length;
+    makeBubbles(); makeSparkles(); updateSwatches();
+  }
+  function startGame(mode) {
+    audioInit();
+    Object.assign(S, { mode, paused: false, t: START_TIME, score: 0, progress: 0, phase: 1, lastMove: null, repeat: 0,
+      switchStreak: 0, speed: 1, glitter: false, slimes: 0, mixes: 0, bestCombo: 0, lastInput: performance.now() });
+    off.fill(0); vel.fill(0); c = { x: home.x, y: home.y }; gReset(); particles = [];
+    makeBubbles(); makeSparkles();
+    $('menu').classList.add('hidden'); $('endScreen').classList.add('hidden'); $('idle').classList.add('hidden');
+    $('timePill').style.visibility = mode === 'challenge' ? 'visible' : 'hidden';
+    $('hud').querySelector('.pill').style.visibility = mode === 'challenge' ? 'visible' : 'hidden';
+    $('swatches').classList.toggle('hidden', mode !== 'chill');
+    updateSwatches(); updateHud();
+  }
+  function endGame() {
+    S.mode = 'end'; stretchStop(); grab = null;
+    $('finalScore').textContent = S.score;
+    $('finalInfo').textContent = `${S.slimes} slime${S.slimes === 1 ? '' : 's'} finished, best variety streak ${S.bestCombo}. Leaderboard coming soon.`;
+    $('endScreen').classList.remove('hidden'); $('swatches').classList.add('hidden');
+    sndChime([392, 330, 262]);
+    setTilt('');
+  }
+  function toMenu() { S.mode = 'menu'; stretchStop(); $('endScreen').classList.add('hidden'); $('menu').classList.remove('hidden'); $('swatches').classList.add('hidden'); setTilt(''); }
+
+  /* ---------- particles ---------- */
+  function burst(x, y, n, glitter) {
+    const k = S.fx ? 1 : 0.35;
+    for (let i = 0; i < n * k; i++) {
+      const a = Math.random() * TAU, s = 2 + Math.random() * 6;
+      particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 2, life: 1, size: 2 + Math.random() * 4,
+        col: glitter ? ['#fff', '#ffe27a', '#ff9be0', '#9ad1ff', '#b5ffd9'][i % 5] : '#fff' });
+    }
+  }
+  function makeBubbles() { bubbles = Array.from({ length: 14 }, () => ({ a: Math.random() * TAU, d: Math.random() * 0.8, r: 3 + Math.random() * 9, s: 0.3 + Math.random() })); }
+  function makeSparkles() { sparkles = Array.from({ length: 34 }, () => ({ a: Math.random() * TAU, d: Math.random() * 0.85, s: 1.5 + Math.random() * 3, p: Math.random() * TAU })); }
+
+  /* ---------- UI helpers ---------- */
+  function popBadge(txt, warn) {
+    const b = $('moveBadge'); b.textContent = txt; b.style.color = warn ? '#ffb3c1' : '#fff';
+    b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop');
+  }
+  function toast(txt) { const t = $('toast'); t.textContent = txt; t.classList.remove('show'); void t.offsetWidth; t.classList.add('show'); }
+  function updateHud() {
+    $('score').textContent = S.score;
+    $('time').textContent = Math.ceil(Math.max(0, S.t));
+    $('time').classList.toggle('low', S.mode === 'challenge' && S.t <= LOW_TIME);
+    $('speedFill').style.width = clamp(S.speed / 1.5, 0.05, 1) * 100 + '%';
+    $('progFill').style.width = S.progress + '%';
+    $('phaseLabel').textContent = PHASE_NAMES[S.phase] + (S.speed < 0.6 ? '  (slime is stiff! change your move)' : '');
+  }
+  function updateSwatches() {
+    const box = $('swatches');
+    if (!box.children.length) {
+      SWATCHES.forEach(([name, col], i) => {
+        const d = document.createElement('div'); d.className = 'sw'; d.style.background = col; d.title = name;
+        d.addEventListener('pointerdown', e => { e.stopPropagation(); S.color = i; updateSwatches(); });
+        box.appendChild(d);
+      });
+    }
+    [...box.children].forEach((d, i) => d.classList.toggle('sel', i === S.color));
+  }
+
+  /* ---------- input ---------- */
+  function stretchLimit() { return R * (S.phase === 1 ? 1.7 : S.phase === 2 ? 1.25 : 0.85); }
+  cv.addEventListener('pointerdown', e => {
+    audioInit();
+    if (S.mode !== 'chill' && S.mode !== 'challenge') return;
+    if (S.paused) { S.paused = false; $('idle').classList.add('hidden'); }
+    if (grab) return;
+    cv.setPointerCapture(e.pointerId);
+    finger = { x: e.clientX, y: e.clientY }; S.lastInput = performance.now();
+    G.lastY = e.clientY; gReset();
+    if (Math.hypot(finger.x - c.x, finger.y - c.y) < R * 1.45) {
+      grab = { id: e.pointerId }; stretchStart(); sndSquish(0.6);
+      for (let i = 0; i < N; i++) vel[i] -= 2;
+    } else grab = { id: e.pointerId, free: true };
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!grab || e.pointerId !== grab.id) return;
+    finger = { x: e.clientX, y: e.clientY }; S.lastInput = performance.now();
+    gMove(finger.x, finger.y, performance.now());
+  });
+  function release(e) {
+    if (!grab || e.pointerId !== grab.id) return;
+    grab = null; stretchStop(); gReset();
+  }
+  cv.addEventListener('pointerup', release);
+  cv.addEventListener('pointercancel', release);
+
+  $('goChill').onclick = () => startGame('chill');
+  $('goChal').onclick = () => startGame('challenge');
+  $('again').onclick = () => startGame('challenge');
+  $('toMenu').onclick = toMenu;
+  $('btnFx').onclick = () => { S.fx = !S.fx; $('btnFx').textContent = 'Effects: ' + (S.fx ? 'on' : 'reduced'); $('btnFx').classList.toggle('off', !S.fx); if (!S.fx) setTilt(''); };
+  $('btnSnd').onclick = () => { S.snd = !S.snd; $('btnSnd').textContent = 'Sound: ' + (S.snd ? 'on' : 'off'); $('btnSnd').classList.toggle('off', !S.snd); if (!S.snd) stretchStop(); };
+
+  /* ---------- simulation ---------- */
+  function physics(f) {
+    const now = performance.now();
+    // variety slowdown relaxes after a rest
+    if (S.lastMove && now - S.lastMoveAt > 1400 && S.mode !== 'menu') { S.repeat = 0; S.speed += (1 - S.speed) * 0.05 * f; }
+    // slime stiffness: repeating the same move makes it stiff
+    const stiff = 1 + (1 - Math.min(1, S.speed)) * 3;
+    const k = (S.phase === 1 ? 0.035 : S.phase === 2 ? 0.05 : 0.07) * stiff;
+    const damp = (S.phase === 1 ? 0.9 : 0.93) - (stiff - 1) * 0.015;
+    const fr = grab && !grab.free ? Math.hypot(finger.x - c.x, finger.y - c.y) : 0;
+    const fa = Math.atan2(finger.y - c.y, finger.x - c.x);
+    const stretchAmt = grab && !grab.free ? Math.max(0, (fr - R) / R) : 0;
+    const sigma = 0.55 / (1 + stretchAmt * 0.9);
+    if (grab && !grab.free) {
+      if (fr - R > stretchLimit()) { // snap!
+        sndSnap(); burst(finger.x, finger.y, 10, false);
+        for (let i = 0; i < N; i++) { const w = Math.exp(-Math.pow(wrap(ang[i] - fa) / sigma, 2)); vel[i] -= off[i] * 0.35 * w; }
+        grab = { id: grab.id, free: true }; stretchStop();
+      } else stretchUpdate(stretchAmt);
+      c.x += (finger.x - c.x) * 0.012 * f; c.y += (finger.y - c.y) * 0.012 * f;
+    }
+    c.x += (home.x - c.x) * 0.03 * f; c.y += (home.y - c.y) * 0.03 * f;
+    // two passes: compute all forces from the current shape first, then integrate (in-place updates made the ripples grow)
+    for (let i = 0; i < N; i++) {
+      const l = off[(i + N - 1) % N], r = off[(i + 1) % N];
+      let a = -k * off[i] + 0.28 * (l + r - 2 * off[i]);
+      if (grab && !grab.free) {
+        const w = Math.exp(-Math.pow(wrap(ang[i] - fa) / sigma, 2));
+        if (w > 0.02) a += 0.24 * ((fr - R) * w - off[i]) * w;
+      }
+      accBuf[i] = a;
+    }
+    let mean = 0;
+    for (let i = 0; i < N; i++) {
+      vel[i] = (vel[i] + accBuf[i] * f) * Math.pow(damp, f);
+      off[i] += vel[i] * f; off[i] = clamp(off[i], -R * 0.7, R * 1.9); mean += off[i];
+    }
+    mean /= N;
+    for (let i = 0; i < N; i++) off[i] -= mean * 0.3 * f * 0.5;
+  }
+
+  function step(dt) {
+    const f = dt * 60, now = performance.now();
+    const n = Math.max(1, Math.ceil(f - 1e-6));
+    for (let j = 0; j < n; j++) physics(f / n);
+    // particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i]; p.x += p.vx * f; p.y += p.vy * f; p.vy += 0.18 * f; p.life -= 0.018 * f;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+    // challenge clock
+    if (S.mode === 'challenge') {
+      if (!S.paused) {
+        if (grab) S.lastInput = now;   // finger held down counts as activity
+        if (now - S.lastInput > IDLE_PAUSE * 1000) { S.paused = true; $('idle').classList.remove('hidden'); }
+        else {
+          const before = Math.ceil(S.t);
+          S.t -= dt;
+          if (S.t <= LOW_TIME && Math.ceil(S.t) !== before) { sndBuzz(); if (S.fx && navigator.vibrate) navigator.vibrate(30); }
+          if (S.t <= 0) { S.t = 0; endGame(); }
+        }
+      }
+      // time pressure: tilt the whole stage
+      if (S.fx && S.t <= LOW_TIME && S.t > 0 && !S.paused) {
+        const amp = 1 + (LOW_TIME - S.t) * 0.18;
+        setTilt(`rotate(${Math.sin(now / 120) * amp}deg) translate(${Math.sin(now / 47) * amp * 0.6}px, 0)`);
+      } else setTilt('');
+    }
+  }
+
+  /* ---------- drawing ---------- */
+  function draw(now) {
+    ctx2d.clearRect(0, 0, W, H);
+    // soft shadow
+    ctx2d.fillStyle = 'rgba(0,0,0,.18)';
+    ctx2d.beginPath(); ctx2d.ellipse(c.x, home.y + R * 1.12, R * 1.05, R * 0.18, 0, 0, TAU); ctx2d.fill();
+
+    const base = hexToRgb(SWATCHES[S.color][1]);
+    const dark = mix(base, [40, 20, 80], 0.45), light = mix(base, [255, 255, 255], 0.6);
+    const stiff = S.speed < 0.6;
+    const body = stiff ? mix(base, [150, 150, 160], 0.25) : base;
+    const alpha = S.phase === 1 ? 0.82 : S.phase === 2 ? 0.92 : 1;
+
+    const P = ang.map((a, i) => { const r = R + off[i]; return { x: c.x + Math.cos(a) * r, y: c.y + Math.sin(a) * r }; });
+    const path = () => {
+      ctx2d.beginPath();
+      const m0 = { x: (P[N - 1].x + P[0].x) / 2, y: (P[N - 1].y + P[0].y) / 2 };
+      ctx2d.moveTo(m0.x, m0.y);
+      for (let i = 0; i < N; i++) {
+        const p = P[i], q = P[(i + 1) % N];
+        ctx2d.quadraticCurveTo(p.x, p.y, (p.x + q.x) / 2, (p.y + q.y) / 2);
+      }
+      ctx2d.closePath();
+    };
+    // body
+    const g = ctx2d.createRadialGradient(c.x - R * 0.35, c.y - R * 0.4, R * 0.1, c.x, c.y, R * 1.12);
+    g.addColorStop(0, rgba(light, alpha)); g.addColorStop(0.55, rgba(body, alpha)); g.addColorStop(1, rgba(mix(body, dark, 0.55), alpha));
+    ctx2d.fillStyle = g; path(); ctx2d.fill();
+    ctx2d.lineWidth = 4; ctx2d.strokeStyle = rgba(dark, 0.7); ctx2d.stroke();
+    ctx2d.lineWidth = 1.5; ctx2d.strokeStyle = 'rgba(255,255,255,.55)'; ctx2d.stroke();
+
+    ctx2d.save(); path(); ctx2d.clip();
+    // phase 1: bubbles inside
+    if (S.phase === 1) {
+      bubbles.forEach(b => {
+        const x = c.x + Math.cos(b.a) * b.d * R, y = c.y + Math.sin(b.a + now / 4000 * b.s) * b.d * R * 0.9;
+        ctx2d.fillStyle = 'rgba(255,255,255,.28)'; ctx2d.beginPath(); ctx2d.arc(x, y, b.r, 0, TAU); ctx2d.fill();
+        ctx2d.fillStyle = 'rgba(255,255,255,.7)'; ctx2d.beginPath(); ctx2d.arc(x - b.r * 0.3, y - b.r * 0.3, b.r * 0.28, 0, TAU); ctx2d.fill();
+      });
+    }
+    // phase 2: stretch lines
+    if (S.phase === 2) {
+      ctx2d.strokeStyle = 'rgba(255,255,255,.22)'; ctx2d.lineWidth = 2;
+      for (let i = 0; i < 6; i++) { ctx2d.beginPath(); ctx2d.moveTo(c.x - R + i * R * 0.35, c.y - R); ctx2d.bezierCurveTo(c.x - R * 0.5 + i * R * 0.3, c.y - R * 0.3, c.x - R * 0.2 + i * R * 0.35, c.y + R * 0.3, c.x - R * 0.7 + i * R * 0.4, c.y + R); ctx2d.stroke(); }
+    }
+    // glitter inside
+    if (S.glitter) {
+      sparkles.forEach(sp => {
+        const x = c.x + Math.cos(sp.a) * sp.d * R, y = c.y + Math.sin(sp.a) * sp.d * R;
+        const tw = 0.4 + 0.6 * Math.abs(Math.sin(now / 300 + sp.p));
+        ctx2d.fillStyle = `rgba(255,255,255,${tw})`; ctx2d.save(); ctx2d.translate(x, y); ctx2d.rotate(sp.p);
+        ctx2d.fillRect(-sp.s, -sp.s * 0.35, sp.s * 2, sp.s * 0.7); ctx2d.fillRect(-sp.s * 0.35, -sp.s, sp.s * 0.7, sp.s * 2); ctx2d.restore();
+      });
+    }
+    // gloss
+    const shine = S.phase === 3 ? 0.85 : S.phase === 2 ? 0.6 : 0.45;
+    ctx2d.fillStyle = `rgba(255,255,255,${shine})`;
+    ctx2d.beginPath(); ctx2d.ellipse(c.x - R * 0.42, c.y - R * 0.5, R * 0.3, R * 0.13, -0.6, 0, TAU); ctx2d.fill();
+    ctx2d.beginPath(); ctx2d.arc(c.x - R * 0.12, c.y - R * 0.68, R * 0.045, 0, TAU); ctx2d.fill();
+    ctx2d.restore();
+
+    // finger indicator
+    if (grab && S.mode !== 'menu') {
+      ctx2d.strokeStyle = 'rgba(255,255,255,.55)'; ctx2d.lineWidth = 3;
+      ctx2d.beginPath(); ctx2d.arc(finger.x, finger.y, 18, 0, TAU); ctx2d.stroke();
+    }
+    // particles
+    particles.forEach(p => { ctx2d.globalAlpha = Math.max(0, p.life); ctx2d.fillStyle = p.col; ctx2d.beginPath(); ctx2d.arc(p.x, p.y, p.size, 0, TAU); ctx2d.fill(); });
+    ctx2d.globalAlpha = 1;
+  }
+
+  /* ---------- loop ---------- */
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (!document.hidden) { step(dt); draw(now); updateHud(); }
+    requestAnimationFrame(frame);
+  }
+  resize(); makeBubbles(); makeSparkles(); updateSwatches();
+  $('timePill').style.visibility = 'hidden'; $('hud').querySelector('.pill').style.visibility = 'hidden';
+  requestAnimationFrame(frame);
+
+  // test hook (harmless in production; used by automated tests)
+  window.__slime = { S, off, vel, registerMove, step, startGame, get R() { return R; }, get home() { return home; } };
+})();
+</script>
+</body>
+</html>
