@@ -62,3 +62,12 @@ Single `docs/index.html`, assets in `docs/assets`, hosted free first (GitHub Pag
 - Gluey stretch (phase 1 strongest, phase 2 thinner, none in phase 3): the lump is capped at 0.6R, the rest of the pull is a neck plus a blob on the finger. On snap the strand springs back.
 - Layout: glitters in vertical columns left (Silver, Gold) and right (Rainbow), colours along the bottom.
 - 39 headless checks pass. Not tested on a real phone. The strand and the swipe thresholds will need tuning after real play.
+
+## Multi-finger stretch, breaking, rejoining (v0.5, 20 Nov 2026)
+- Every finger that holds the slime pulls its own part (own gluey strand per finger). Pull in several directions at once.
+- Stress: pulling a finger past 75% of the phase limit builds stress (about 1.25 s at the limit with one finger, faster with more fingers). A grip that tears off adds +0.3. Stress melts away at 0.7/s when you relax. Rim turns red, slime trembles, Stress bar shows, warning at 50%.
+- At 100% stress the slime breaks into 5 pieces (they share the slime's area). Penalty: progress -30, variety streak and speed reset, no mixing while broken. Challenge also: -100 points and -5 s (BREAK_POINTS, BREAK_TIME).
+- Rejoin: drag pieces with fingers; pieces pull gently towards each other and merge when they touch; one piece left = whole slime again (plop wobble). Time keeps running in Challenge, so the delay is the extra cost.
+- Gestures (circles, swipes) only count with one finger on the screen.
+- Tests: 50 headless checks (synthetic multi-pointer events). NOT tested with real multi-touch on a phone: that is the first thing to check (iOS Safari multi-touch, browser gestures, palm touches).
+- To tune after play: stress speed (0.8/s), limits per phase, merge distance (0.8), piece attraction (0.06), penalties.
