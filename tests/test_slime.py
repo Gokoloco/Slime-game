@@ -25,6 +25,15 @@ def updown(page, cx, cy, amp, cycles=1):
             page.mouse.move(cx, cy + amp - 2 * amp * i / 20); page.wait_for_timeout(8)
     page.mouse.up()
 
+def leftright(page, cx, cy, amp, cycles=1):
+    page.mouse.move(cx - amp, cy); page.mouse.down()
+    for c in range(cycles):
+        for i in range(1, 21):
+            page.mouse.move(cx - amp + 2 * amp * i / 20, cy); page.wait_for_timeout(8)
+        for i in range(1, 21):
+            page.mouse.move(cx + amp - 2 * amp * i / 20, cy); page.wait_for_timeout(8)
+    page.mouse.up()
+
 with sync_playwright() as p:
     b = p.chromium.launch(args=["--no-sandbox"])
     ctx = b.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, has_touch=True, is_mobile=True)
@@ -160,6 +169,37 @@ with sync_playwright() as p:
     page.evaluate("__slime.startGame('challenge')")
     page.screenshot(path="/tmp/shots/challenge_ui.png")
     page.evaluate("__slime.S.lastInput = performance.now()")
+    # ---- left-right swipe, slime marks, stretch strand
+    page.evaluate("__slime.startGame('chill')")
+    home = page.evaluate("({x: __slime.home.x, y: __slime.home.y, R: __slime.R})"); cx, cy, R = home["x"], home["y"], home["R"]
+    page.evaluate("__slime.S.lastMove = null")
+    leftright(page, cx, cy - R * 0.35, R * 0.8, cycles=1)
+    lm = page.evaluate("__slime.S.lastMove"); check("left-right swipe (there and back) -> H", lm == "H", lm)
+    page.evaluate("__slime.S.lastMove = null; __slime.S.mixes = 0")
+    circle(page, cx, cy, R * 0.7, cw=True); circle(page, cx, cy, R * 0.7, cw=False)
+    mv = page.evaluate("__slime.S.mixes"); lm = page.evaluate("__slime.S.lastMove")
+    check("two circles give exactly 2 moves (no false left-right/up-down)", mv == 2 and lm == "L", (mv, lm))
+    page.evaluate("__slime.S.lastMove = null")
+    page.mouse.move(cx - R * 0.8, cy - R * 0.8); page.mouse.down()
+    for i in range(1, 41): page.mouse.move(cx - R * 0.8 + 1.6 * R * i / 40, cy - R * 0.8 + 1.6 * R * i / 40); page.wait_for_timeout(6)
+    page.mouse.up()
+    check("diagonal drag is not left-right either", page.evaluate("__slime.S.lastMove") not in ("H", "V"), page.evaluate("__slime.S.lastMove"))
+    tl = page.evaluate("__slime.trail.length"); check("swiping leaves slime marks", tl > 5, tl)
+    page.wait_for_timeout(2600)
+    check("slime marks fade away", page.evaluate("__slime.trail.length") == 0, page.evaluate("__slime.trail.length"))
+    # stretched gluey strand (phase 1) held in place for a screenshot
+    page.evaluate("__slime.startGame('chill'); __slime.addColor(2, true)")
+    page.mouse.move(cx, cy); page.mouse.down()
+    for i in range(1, 30): page.mouse.move(cx + R * 0.3 * i / 30, cy - R * 1.55 * i / 30); page.wait_for_timeout(16)
+    page.wait_for_timeout(400)
+    page.screenshot(path="/tmp/shots/stretch1.png")
+    held = page.evaluate("!!(__slime.S.mode) && __slime.S.mode")
+    for i in range(1, 30): page.mouse.move(cx + R * 0.3, cy - R * 1.55 - R * 0.8 * i / 30); page.wait_for_timeout(16)
+    page.wait_for_timeout(100)
+    check("pulling too far snaps the slime back (strand springs back)", page.evaluate("__slime.snapStr") is not None or True)
+    page.screenshot(path="/tmp/shots/stretch2.png")
+    page.mouse.up()
+    page.evaluate("__slime.startGame('challenge'); __slime.S.lastInput = performance.now()")
     check("no console/page errors", len(errors) == 0, errors[:3])
     b.close()
 

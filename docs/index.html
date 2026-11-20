@@ -42,12 +42,14 @@
   #swatches{position:absolute;left:0;right:0;bottom:calc(max(env(safe-area-inset-bottom),14px) + 82px);display:flex;justify-content:center;gap:10px}
   .sw{width:34px;height:34px;border-radius:50%;border:3px solid rgba(255,255,255,.5);box-shadow:0 2px 0 rgba(0,0,0,.25);cursor:pointer}
   .sw.sel{border-color:#fff;transform:scale(1.15)}
-  #glitters{position:absolute;left:0;right:0;bottom:calc(max(env(safe-area-inset-bottom),14px) + 130px);display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px 8px;padding:0 8px}
-  .gl{padding:6px 11px;border-radius:16px;font-size:13px;font-weight:800;background:rgba(255,255,255,.2);border:2px solid rgba(255,255,255,.5);cursor:pointer;white-space:nowrap}
+  #glitters{position:absolute;inset:0;pointer-events:none}
+  .glcol{position:absolute;top:34%;display:flex;flex-direction:column;gap:12px;pointer-events:auto}
+  #glL{left:6px}#glR{right:6px}
+  .gl{width:54px;height:54px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:10px;font-weight:800;line-height:1.1;background:rgba(255,255,255,.2);border:2px solid rgba(255,255,255,.5);cursor:pointer}
+  .gl i{font-style:normal;font-size:20px}
   .gl.locked{opacity:.4}
   .gl.ready{border-color:#ffe27a;animation:pulse .6s infinite alternate}
-  #glInfo{font-size:12px;font-weight:700;opacity:.85;width:100%;text-align:center;order:-1}
-  #glInfo:empty{display:none}
+  #glInfo{position:absolute;left:0;right:0;bottom:calc(max(env(safe-area-inset-bottom),14px) + 128px);text-align:center;font-size:12px;font-weight:700;opacity:.85}
   .final{font-size:46px;font-weight:800}
 </style>
 </head>
@@ -77,7 +79,7 @@
 
   <div class="overlay" id="menu">
     <h1>Slime</h1>
-    <p class="sub">Mix with your finger: circles left, circles right, and up-down. Switching moves mixes faster!</p>
+    <p class="sub">Mix with your finger: circles right, circles left, up-down and left-right swipes. Switching moves mixes faster!</p>
     <p class="sub" style="font-size:14px;opacity:.85"><b>Chill:</b> no timer. Tap colors and glitter to add them, then mix.<br><b>Challenge:</b> 45 seconds. Every move scores. A color fully mixed in = +40. 5 different moves in a row = a glitter charge (+50 and +3 s when you use it).</p>
     <button class="b-chill" id="goChill">Chill mode</button>
     <button class="b-chal" id="goChal">Challenge mode</button>
@@ -133,7 +135,7 @@
   const ang = Array.from({ length: N }, (_, i) => i / N * TAU);
   let grab = null;                   // {id}
   let finger = { x: 0, y: 0 };
-  let particles = [], sparkles = [], bubbles = [];
+  let particles = [], sparkles = [], bubbles = [], trail = [], snapStr = null;
 
   /* ---------- audio (synthesized, original) ---------- */
   let ac = null, noiseBuf = null, stretchSrc = null, stretchGain = null, stretchFilt = null;
@@ -255,8 +257,29 @@
   const rgba = (a, al) => `rgba(${a[0]},${a[1]},${a[2]},${al})`;
 
   /* ---------- gesture detection ---------- */
-  const G = { lastAng: null, acc: 0, vDir: 0, vStart: 0, vExtreme: 0, vMinX: 0, vMaxX: 0, strokes: 0, lastCircleAt: 0, lastY: 0 };
-  function gReset() { G.lastAng = null; G.acc = 0; G.vDir = 0; G.strokes = 0; }
+  const newStroke = () => ({ dir: 0, start: 0, ext: 0, min: 0, max: 0, counted: false, strokes: 0 });
+  const G = { lastAng: null, acc: 0, v: newStroke(), h: newStroke(), lastCircleAt: 0, lastY: 0, lastX: 0 };
+  function gReset() { G.lastAng = null; G.acc = 0; G.v = newStroke(); G.h = newStroke(); }
+  // a straight stroke counts as soon as it is long enough; two strokes (there and back) = one move
+  function stroke(st, main, cross, step, now, type) {
+    if (Math.abs(step) < 0.5) return;
+    const dir = Math.sign(step);
+    if (st.dir === 0) { st.dir = dir; st.start = main; st.ext = main; st.min = st.max = cross; st.counted = false; return; }
+    if (dir === st.dir) {
+      st.ext = main; st.min = Math.min(st.min, cross); st.max = Math.max(st.max, cross);
+      const travel = Math.abs(st.ext - st.start), width = st.max - st.min;
+      if (!st.counted && travel > R * 0.55) {
+        st.counted = true;
+        if (width < travel * 0.7 && Math.abs(G.acc) < TAU * 0.5) {     // not while a circle is being drawn
+          st.strokes++;
+          if (st.strokes % 2 === 0 && now - G.lastCircleAt > 500) registerMove(type);
+        } else st.strokes = 0;
+      }
+    } else {
+      if (!st.counted) st.strokes = 0;          // reversal before a full stroke: just jitter
+      st.dir = dir; st.start = st.ext; st.ext = main; st.min = st.max = cross; st.counted = false;
+    }
+  }
   function gMove(x, y, now) {
     const dx = x - home.x, dy = y - home.y, d = Math.hypot(dx, dy);
     // circles
@@ -268,35 +291,18 @@
         G.acc += da;
         if (Math.abs(G.acc) >= TAU * 0.7) {
           registerMove(G.acc > 0 ? 'R' : 'L'); // positive angle in screen coords = clockwise
-          G.acc = 0; G.lastCircleAt = now;
+          G.acc = 0; G.lastCircleAt = now; G.v.strokes = 0; G.h.strokes = 0;
         }
       }
       G.lastAng = a;
     } else { G.lastAng = null; G.acc = 0; }
-    // vertical strokes (up-down), ignored right after a circle
-    const dyStep = y - G.lastY; G.lastY = y;
-    if (Math.abs(dyStep) < 0.5) return;
-    const dir = Math.sign(dyStep);
-    if (G.vDir === 0) { G.vDir = dir; G.vStart = y; G.vExtreme = y; G.vMinX = G.vMaxX = x; G.vCounted = false; return; }
-    if (dir === G.vDir) {
-      G.vExtreme = y; G.vMinX = Math.min(G.vMinX, x); G.vMaxX = Math.max(G.vMaxX, x);
-      const travel = Math.abs(G.vExtreme - G.vStart), width = G.vMaxX - G.vMinX;
-      // a stroke counts as soon as it is long and straight enough; two strokes (down + up) = one up-down move
-      if (!G.vCounted && travel > R * 0.55) {
-        G.vCounted = true;
-        if (width < travel * 0.7) {
-          G.strokes++;
-          if (G.strokes % 2 === 0 && now - G.lastCircleAt > 500) registerMove('V');
-        } else G.strokes = 0;
-      }
-    } else {
-      if (!G.vCounted) G.strokes = 0;          // reversal before a full stroke: just jitter
-      G.vDir = dir; G.vStart = G.vExtreme; G.vExtreme = y; G.vMinX = G.vMaxX = x; G.vCounted = false;
-    }
+    const dyStep = y - G.lastY, dxStep = x - G.lastX; G.lastY = y; G.lastX = x;
+    stroke(G.v, y, x, dyStep, now, 'V');     // up-down
+    stroke(G.h, x, y, dxStep, now, 'H');     // left-right (swipe to the right, then back to the left)
   }
 
   /* ---------- game logic ---------- */
-  const MOVE_LABEL = { R: '↻ Right', L: '↺ Left', V: '↕ Up-down' };
+  const MOVE_LABEL = { R: '↻ Right', L: '↺ Left', V: '↕ Up-down', H: '↔ Left-right' };
   function registerMove(type) {
     if (S.mode !== 'chill' && S.mode !== 'challenge') return;
     if (S.paused || S.t <= 0) return;
@@ -387,7 +393,7 @@
     audioInit();
     Object.assign(S, { mode, paused: false, t: START_TIME, score: 0, progress: 0, phase: 1, lastMove: null, repeat: 0,
       switchStreak: 0, speed: 1, glitter: false, glitters: [], charges: 0, mixedCount: 0, slimes: 0, mixes: 0, bestCombo: 0, lastInput: performance.now() });
-    off.fill(0); vel.fill(0); c = { x: home.x, y: home.y }; gReset(); particles = [];
+    off.fill(0); vel.fill(0); c = { x: home.x, y: home.y }; gReset(); particles = []; trail = []; snapStr = null;
     Object.assign(S, { base: MILK.slice(), add: null, blend: 0, fresh: true, swirl: 0, swirlV: 0 });
     makeBubbles(); makeSparkles();
     $('menu').classList.add('hidden'); $('endScreen').classList.add('hidden'); $('idle').classList.add('hidden');
@@ -447,18 +453,21 @@
   function updateGlitters() {
     const box = $('glitters');
     if (!box.children.length) {
+      const L = document.createElement('div'); L.className = 'glcol'; L.id = 'glL';
+      const Rr = document.createElement('div'); Rr.className = 'glcol'; Rr.id = 'glR';
       GLITTERS.forEach(([name], k) => {
-        const d = document.createElement('div'); d.className = 'gl'; d.textContent = (k === 2 ? '🌈 ' : '✨ ') + name;
+        const d = document.createElement('div'); d.className = 'gl'; d.innerHTML = '<i>' + (k === 2 ? '🌈' : '✨') + '</i>' + name;
         d.addEventListener('pointerdown', e => { e.stopPropagation(); addGlitter(k); });
-        box.appendChild(d);
+        (k === 2 ? Rr : L).appendChild(d);
       });
-      const info = document.createElement('span'); info.id = 'glInfo'; box.appendChild(info);
+      const info = document.createElement('div'); info.id = 'glInfo';
+      box.appendChild(L); box.appendChild(Rr); box.appendChild(info);
     }
     const chal = S.mode === 'challenge';
+    const btns = [...box.querySelectorAll('.gl')];
     GLITTERS.forEach(([, , cost], k) => {
-      const d = box.children[k];
-      d.classList.toggle('locked', chal && S.charges < cost);
-      d.classList.toggle('ready', chal && S.charges >= cost);
+      btns[k].classList.toggle('locked', chal && S.charges < cost);
+      btns[k].classList.toggle('ready', chal && S.charges >= cost);
     });
     $('glInfo').textContent = chal ? (S.charges > 0 ? 'Glitter charges: ' + S.charges : '5 different moves = 1 charge') : '';
   }
@@ -472,7 +481,7 @@
     if (grab) return;
     cv.setPointerCapture(e.pointerId);
     finger = { x: e.clientX, y: e.clientY }; S.lastInput = performance.now();
-    G.lastY = e.clientY; gReset();
+    G.lastY = e.clientY; G.lastX = e.clientX; gReset();
     if (Math.hypot(finger.x - c.x, finger.y - c.y) < R * 1.45) {
       grab = { id: e.pointerId }; stretchStart(); sndSquish(0.6);
       for (let i = 0; i < N; i++) vel[i] -= 2;
@@ -481,6 +490,13 @@
   cv.addEventListener('pointermove', e => {
     if (!grab || e.pointerId !== grab.id) return;
     finger = { x: e.clientX, y: e.clientY }; S.lastInput = performance.now();
+    if (!grab.free) {                       // finger holding slime: leave slime marks where it swipes
+      const L = trail[trail.length - 1];
+      if (!L || Math.hypot(finger.x - L.x, finger.y - L.y) > 6) {
+        trail.push({ x: finger.x, y: finger.y, life: 1, col: mix(slimeColor(), [255, 255, 255], 0.35), r: R * (0.06 + 0.05 * Math.random()) });
+        if (trail.length > 220) trail.shift();
+      }
+    }
     gMove(finger.x, finger.y, performance.now());
   });
   function release(e) {
@@ -513,6 +529,7 @@
     if (grab && !grab.free) {
       if (fr - R > stretchLimit()) { // snap!
         sndSnap(); burst(finger.x, finger.y, 10, false);
+        if (S.phase < 3) snapStr = { tip: { x: finger.x, y: finger.y }, life: 1, s: 0.95 };
         for (let i = 0; i < N; i++) { const w = Math.exp(-Math.pow(wrap(ang[i] - fa) / sigma, 2)); vel[i] -= off[i] * 0.35 * w; }
         grab = { id: grab.id, free: true }; stretchStop();
       } else stretchUpdate(stretchAmt);
@@ -525,7 +542,7 @@
       let a = -k * off[i] + 0.28 * (l + r - 2 * off[i]);
       if (grab && !grab.free) {
         const w = Math.exp(-Math.pow(wrap(ang[i] - fa) / sigma, 2));
-        if (w > 0.02) a += 0.24 * ((fr - R) * w - off[i]) * w;
+        if (w > 0.02) { const pull = S.phase < 3 ? Math.min(fr - R, R * 0.6) : fr - R; a += 0.24 * (pull * w - off[i]) * w; }
       }
       accBuf[i] = a;
     }
@@ -543,6 +560,9 @@
     const n = Math.max(1, Math.ceil(f - 1e-6));
     for (let j = 0; j < n; j++) physics(f / n);
     S.swirl += S.swirlV * f; S.swirlV *= Math.pow(0.95, f);   // colour streaks swirl with your moves
+    // slime marks fade away
+    for (let i = trail.length - 1; i >= 0; i--) { trail[i].life -= dt / 2.2; if (trail[i].life <= 0) trail.splice(i, 1); }
+    if (snapStr) { snapStr.life -= dt * 3.5; if (snapStr.life <= 0) snapStr = null; }
     // particles
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i]; p.x += p.vx * f; p.y += p.vy * f; p.vy += 0.18 * f; p.life -= 0.018 * f;
@@ -569,6 +589,45 @@
   }
 
   /* ---------- drawing ---------- */
+  // gluey strand between the slime and the finger: a neck that thins out, plus sagging threads
+  function drawStrand(tipIn, s, retract, body, light, dark, alpha, now) {
+    const dxs = tipIn.x - c.x, dys = tipIn.y - c.y, len = Math.hypot(dxs, dys);
+    if (len < R * 1.1) return;
+    const dir = { x: dxs / len, y: dys / len }, perp = { x: -dir.y, y: dir.x };
+    const ei = Math.round(((Math.atan2(dys, dxs) + TAU) % TAU) / TAU * N) % N, er = (R + off[ei]) * 0.88;
+    const a0 = { x: c.x + dir.x * er, y: c.y + dir.y * er };
+    alpha = Math.min(1, alpha + 0.12);
+    const tip = retract < 1 ? { x: a0.x + (tipIn.x - a0.x) * retract, y: a0.y + (tipIn.y - a0.y) * retract } : tipIn;
+    const gluey = S.phase === 1 ? 1 : 0.65;
+    const wBase = R * 0.3 * gluey, wTip = R * (0.13 + 0.1 * (1 - s)) * gluey, neck = R * (0.05 + 0.2 * (1 - s)) * gluey;
+    const sag = s * R * 0.3 * (retract < 1 ? retract : 1), wob = Math.sin(now / 90) * 2 * s;
+    const mid = { x: (a0.x + tip.x) / 2 + wob, y: (a0.y + tip.y) / 2 + sag * 0.5 };
+    ctx2d.beginPath();
+    ctx2d.moveTo(a0.x + perp.x * wBase, a0.y + perp.y * wBase);
+    ctx2d.quadraticCurveTo(mid.x + perp.x * neck, mid.y + perp.y * neck, tip.x + perp.x * wTip, tip.y + perp.y * wTip);
+    ctx2d.quadraticCurveTo(tip.x + dir.x * wTip * 1.4, tip.y + dir.y * wTip * 1.4, tip.x - perp.x * wTip, tip.y - perp.y * wTip);
+    ctx2d.quadraticCurveTo(mid.x - perp.x * neck, mid.y - perp.y * neck, a0.x - perp.x * wBase, a0.y - perp.y * wBase);
+    ctx2d.closePath();
+    ctx2d.fillStyle = rgba(body, alpha); ctx2d.fill();
+    ctx2d.lineWidth = 3; ctx2d.strokeStyle = rgba(dark, 0.6); ctx2d.stroke();
+    // shiny line along the neck
+    ctx2d.lineWidth = 2; ctx2d.strokeStyle = 'rgba(255,255,255,.45)';
+    ctx2d.beginPath(); ctx2d.moveTo(a0.x + perp.x * wBase * 0.45, a0.y + perp.y * wBase * 0.45);
+    ctx2d.quadraticCurveTo(mid.x + perp.x * neck * 0.4, mid.y + perp.y * neck * 0.4, tip.x + perp.x * wTip * 0.4, tip.y + perp.y * wTip * 0.4); ctx2d.stroke();
+    // thin sticky threads that sag and get thinner the more you pull
+    ctx2d.lineCap = 'round';
+    for (const k of [-1, 1]) {
+      const off1 = k * wTip * 0.5, off2 = k * wBase * 0.35, sg = sag * 0.35;
+      ctx2d.lineWidth = Math.max(1.5, 4 - 2.5 * s); ctx2d.strokeStyle = rgba(mix(body, light, 0.4), 0.6 * alpha);
+      ctx2d.beginPath(); ctx2d.moveTo(tip.x + perp.x * off1, tip.y + perp.y * off1);
+      ctx2d.quadraticCurveTo(mid.x + perp.x * k * neck * 0.8, mid.y + sg, a0.x + perp.x * off2, a0.y + perp.y * off2); ctx2d.stroke();
+    }
+    ctx2d.lineCap = 'butt';
+    // blob of slime stuck to the finger
+    ctx2d.fillStyle = rgba(body, alpha); ctx2d.beginPath(); ctx2d.arc(tip.x, tip.y, wTip * 1.05, 0, TAU); ctx2d.fill();
+    ctx2d.lineWidth = 2; ctx2d.strokeStyle = rgba(dark, 0.5); ctx2d.stroke();
+    ctx2d.fillStyle = 'rgba(255,255,255,.55)'; ctx2d.beginPath(); ctx2d.arc(tip.x - wTip * 0.3, tip.y - wTip * 0.3, wTip * 0.28, 0, TAU); ctx2d.fill();
+  }
   function draw(now) {
     ctx2d.clearRect(0, 0, W, H);
     // soft shadow
@@ -581,6 +640,12 @@
     const body = stiff ? mix(base, [150, 150, 160], 0.25) : base;
     const alpha = S.phase === 1 ? 0.82 : S.phase === 2 ? 0.92 : 1;
 
+    if (S.phase < 3) {
+      if (grab && !grab.free) {
+        const fr2 = Math.hypot(finger.x - c.x, finger.y - c.y), s2 = clamp((fr2 - R) / stretchLimit(), 0, 1);
+        if (s2 > 0.12) drawStrand(finger, s2, 1, body, light, dark, alpha, now);
+      } else if (snapStr) drawStrand(snapStr.tip, snapStr.s, snapStr.life, body, light, dark, alpha, now);
+    }
     const P = ang.map((a, i) => { const r = R + off[i]; return { x: c.x + Math.cos(a) * r, y: c.y + Math.sin(a) * r }; });
     const path = () => {
       ctx2d.beginPath();
@@ -641,6 +706,17 @@
     ctx2d.beginPath(); ctx2d.arc(c.x - R * 0.12, c.y - R * 0.68, R * 0.045, 0, TAU); ctx2d.fill();
     ctx2d.restore();
 
+    // slime marks left by the finger
+    if (trail.length) {
+      ctx2d.lineCap = 'butt';
+      for (let i = 1; i < trail.length; i++) {
+        const a = trail[i - 1], b = trail[i];
+        if (Math.hypot(b.x - a.x, b.y - a.y) > R * 0.5) continue;         // new stroke
+        ctx2d.strokeStyle = rgba(b.col, 0.5 * Math.max(0, b.life)); ctx2d.lineWidth = Math.max(1, b.r * 2 * (0.4 + 0.6 * b.life));
+        ctx2d.beginPath(); ctx2d.moveTo(a.x, a.y); ctx2d.lineTo(b.x, b.y); ctx2d.stroke();
+      }
+      ctx2d.lineCap = 'butt';
+    }
     // finger indicator
     if (grab && S.mode !== 'menu') {
       ctx2d.strokeStyle = 'rgba(255,255,255,.55)'; ctx2d.lineWidth = 3;
@@ -663,7 +739,7 @@
   requestAnimationFrame(frame);
 
   // test hook (harmless in production; used by automated tests)
-  window.__slime = { S, off, vel, registerMove, step, startGame, addColor, addGlitter, slimeColor, mixColors, colorName, get R() { return R; }, get home() { return home; } };
+  window.__slime = { S, get trail() { return trail; }, get snapStr() { return snapStr; }, off, vel, registerMove, step, startGame, addColor, addGlitter, slimeColor, mixColors, colorName, get R() { return R; }, get home() { return home; } };
 })();
 </script>
 </body>

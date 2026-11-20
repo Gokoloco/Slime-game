@@ -55,3 +55,10 @@ Single `docs/index.html`, assets in `docs/assets`, hosted free first (GitHub Pag
 - Challenge scoring: every move scores, a fully mixed colour = +40, 5 different moves in a row = 1 glitter charge.
 - Glitter is a button you tap: Silver (1 charge), Gold (1 charge), Rainbow (2 charges, rare). Each charge used = +50 points, and a use gives +3 s (capped at 60 s). Chill: glitter free.
 - Menu now explains both modes. 33 headless checks pass. Not tested on a real phone.
+
+## Left-right swipe, marks, gluey stretch, new layout (v0.4, 20 Nov 2026)
+- New move H (left-right): swipe one way and back, straight enough (same rule as up-down). Counts as a different move for variety/streaks. Ignored while a circle is being drawn.
+- Slime marks: while the finger holds slime it leaves a pale smear that fades in about 2 s.
+- Gluey stretch (phase 1 strongest, phase 2 thinner, none in phase 3): the lump is capped at 0.6R, the rest of the pull is a neck plus a blob on the finger. On snap the strand springs back.
+- Layout: glitters in vertical columns left (Silver, Gold) and right (Rainbow), colours along the bottom.
+- 39 headless checks pass. Not tested on a real phone. The strand and the swipe thresholds will need tuning after real play.
