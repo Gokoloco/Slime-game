@@ -79,3 +79,11 @@ Single `docs/index.html`, assets in `docs/assets`, hosted free first (GitHub Pag
 - Done = unevenness (TV) below 0.045; Challenge pays +40 once per added colour. Label shows "color N% mixed". Pace about 12-18 good moves per colour.
 - Numbers to tune: MIX_ITER 8, DIFFUSE 0.2, MEAN_PULL 0.003, TV_DONE 0.045, target colour amount 0.85 first / 0.4 later.
 - 53 headless checks pass (run twice). Colours still look pastel on purpose; not tested on a real phone. Performance on slow phones is unchecked (field update every frame while mixing).
+
+## v0.7 Magnific art (20 Nov 2026)
+- Art in `docs/assets` (record of ids/prompts in `assets/ASSETS.md`): workshop background (CSS, with a dark scrim at the bottom for the meters), gluey slime texture (overlay inside the body, strongest in phase 1), glitter layers (silver/gold/rainbow, screen blend, slowly turning and twinkling), Glowstone pop-up.
+- Slime home moved down to 0.56·H so it sits on the table.
+- Perfect slime reward: slime finished + glitter added + a colour fully mixed in + never broken = Glowstone (+200 in Challenge, pop-up, counted on the end screen).
+- Images preload; the game still works without them (falls back to the old look).
+- Tested: 53/53 headless checks, screenshots of menu and play, Glowstone trigger (+310 = 10 move +100 ready +200 stone). NOT tested: real phones, load time on slow mobile data (assets ~0.6 MB), Safari blend modes.
+- Open: Magnific commercial-use terms must be checked BEFORE public launch. Redo smooth texture without hands (xSBQJAwjfW). Toast text is hard to read over the busy background (add a pill). Glitter L/R column split unconfirmed.

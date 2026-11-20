@@ -8,7 +8,7 @@
 <style>
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
   html,body{margin:0;height:100%;overflow:hidden;background:#2a1f4d;font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;color:#fff;touch-action:none}
-  #stage{position:fixed;inset:0;background:radial-gradient(120% 90% at 50% 20%,#5b3f9e 0%,#3a2a73 45%,#241a4a 100%);transform-origin:50% 50%}
+  #stage{position:fixed;inset:0;background:linear-gradient(180deg,rgba(36,26,74,.3) 0%,rgba(36,26,74,0) 30%,rgba(36,26,74,.15) 60%,rgba(30,20,64,.88) 100%),url(assets/bg_workshop.jpg) center/cover no-repeat,radial-gradient(120% 90% at 50% 20%,#5b3f9e 0%,#3a2a73 45%,#241a4a 100%);transform-origin:50% 50%}
   canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
   .hud{position:absolute;left:0;right:0;top:0;padding:max(env(safe-area-inset-top),10px) 14px 0;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none}
   .pill{background:rgba(255,255,255,.14);border-radius:18px;padding:6px 14px;font-weight:700;font-size:18px;backdrop-filter:blur(4px)}
@@ -50,6 +50,10 @@
   .gl.locked{opacity:.4}
   .gl.ready{border-color:#ffe27a;animation:pulse .6s infinite alternate}
   #glInfo{position:absolute;left:0;right:0;bottom:calc(max(env(safe-area-inset-bottom),14px) + 156px);text-align:center;font-size:12px;font-weight:700;opacity:.85}
+  #stone{position:absolute;left:50%;top:22%;width:210px;margin-left:-105px;text-align:center;pointer-events:none;opacity:0;font-weight:800;font-size:22px;text-shadow:0 2px 8px rgba(0,0,0,.5)}
+  #stone img{width:100%;display:block;mix-blend-mode:screen}
+  #stone.show{animation:stonepop 2.6s ease-out}
+  @keyframes stonepop{0%{opacity:0;transform:scale(.3) rotate(-12deg)}15%{opacity:1;transform:scale(1.15) rotate(4deg)}30%{transform:scale(1) rotate(0)}80%{opacity:1}100%{opacity:0;transform:scale(1.05)}}
   .final{font-size:46px;font-weight:800}
 </style>
 </head>
@@ -66,6 +70,7 @@
     <button class="tool" id="btnSnd">Sound: on</button>
   </div>
 
+  <div id="stone"><img src="assets/glowstone.jpg" alt=""><span id="stoneTxt">Glowstone!</span></div>
   <div id="moveBadge"></div>
   <div id="toast"></div>
   <div id="glitters" class="hidden"></div>
@@ -113,6 +118,7 @@
   function setTilt(v) { tiltEls.forEach(el => { el.style.transform = v; }); }
 
   /* ---------- constants (tune in playtests) ---------- */
+  const STONE_POINTS = 200;
   const BREAK_POINTS = 100, BREAK_TIME = 5;       // penalty for breaking the slime in Challenge
   const START_TIME = 45, MAX_TIME = 60, GLITTER_BONUS_TIME = 3, LOW_TIME = 10, IDLE_PAUSE = 6;
   const N = 72;                       // points around the slime
@@ -126,11 +132,18 @@
   const GS = 28, FIELD_EXT = 1.3;     // colour map inside the slime: GS x GS cells covering +-1.3 R
   const MIX_ITER = 8, DIFFUSE = 0.2, MEAN_PULL = 0.003, TV_DONE = 0.045;   // mixing speed (tune in playtests)
 
+  /* ---------- art (made with Magnific, see assets/ASSETS.md) ---------- */
+  const ART = {};
+  function loadArt(name, src) { const im = new Image(); im.onload = () => { ART[name] = im; }; im.src = src; }
+  loadArt('tex', 'assets/slime_tex.jpg');
+  loadArt('gRainbow', 'assets/glitter_rainbow.jpg'); loadArt('gSilver', 'assets/glitter_silver.jpg'); loadArt('gGold', 'assets/glitter_gold.jpg');
+  const GLITTER_ART = ['gSilver', 'gGold', 'gRainbow'];       // same order as GLITTERS
+
   /* ---------- state ---------- */
   const S = {
     mode: 'menu', paused: false, t: START_TIME, score: 0, progress: 0, phase: 1,
     lastMove: null, repeat: 0, switchStreak: 0, speed: 1, lastMoveAt: 0,
-    glitter: false, glitters: [], charges: 0, mixedCount: 0, stress: 0, broken: false, breaks: 0, warned: false, slimes: 0, mixBudget: 0, stirV: 0, stirH: 0, pendingMix: false, adds: 0, swirl: 0, swirlV: 0, fx: true, snd: true, lastInput: 0,
+    glitter: false, glitters: [], charges: 0, mixedCount: 0, stress: 0, broken: false, breaks: 0, warned: false, stones: 0, mixedThis: 0, brokeThis: false, stoneGiven: false, slimes: 0, mixBudget: 0, stirV: 0, stirH: 0, pendingMix: false, adds: 0, swirl: 0, swirlV: 0, fx: true, snd: true, lastInput: 0,
     done: false, mixes: 0, bestCombo: 0
   };
   let W = 0, H = 0, R = 100, home = { x: 0, y: 0 }, c = { x: 0, y: 0 };
@@ -213,7 +226,7 @@
     cv.width = W * dpr; cv.height = H * dpr;
     ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
     R = Math.min(W * 0.34, H * 0.22);
-    home = { x: W / 2, y: H * 0.46 };
+    home = { x: W / 2, y: H * 0.56 };       // the slime sits on the workshop table
     if (!c.x) c = { x: home.x, y: home.y };
   }
   window.addEventListener('resize', resize);
@@ -364,10 +377,11 @@
     }
   }
   function colorMixedDone() {
-    S.pendingMix = false; S.mixedCount++;
+    S.pendingMix = false; S.mixedCount++; S.mixedThis++;
     burst(home.x, home.y, 18, true); sndChime([659, 784]);
     if (S.mode === 'challenge') S.score += 40;
     toast('Color mixed: ' + colorName(slimeColor()) + (S.mode === 'challenge' ? '  +40' : ''));
+    checkPerfect();
   }
   function fieldPaint() {            // upload the colour map to the small canvas (smoothly scaled up when drawing)
     if (!fieldDirty) return;
@@ -476,6 +490,16 @@
     for (let i = 0; i < 16; i++) particles.push({ x: home.x + (Math.random() - 0.5) * R * 0.8, y: home.y - R * 1.5 - Math.random() * R * 0.4,
       vx: (Math.random() - 0.5) * 1.5, vy: 3 + Math.random() * 4, life: 1, size: 3 + Math.random() * 5, col: rgb });
   }
+  // a perfect slime: finished, glitter added, a colour fully mixed in, and never broken -> a Glowstone
+  function checkPerfect() {
+    if (S.stoneGiven || S.progress < 100 || !S.glitter || S.mixedThis < 1 || S.brokeThis) return;
+    if (S.mode !== 'chill' && S.mode !== 'challenge') return;
+    S.stoneGiven = true; S.stones++;
+    if (S.mode === 'challenge') S.score += STONE_POINTS;
+    $('stoneTxt').textContent = 'Glowstone!' + (S.mode === 'challenge' ? '  +' + STONE_POINTS : '');
+    const el = $('stone'); el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+    sndChime([523, 659, 784, 988, 1319]); burst(home.x, home.y, 40, true);
+  }
   function earnCharge() {
     S.charges++; sndChime([784, 988]); updateGlitters();
     toast('Glitter charge! Tap a glitter below');
@@ -492,8 +516,10 @@
     S.glitter = true;
     burst(home.x, home.y, 46, true); sndChime([784, 988, 1175, 1568]); updateGlitters();
     toast(GLITTERS[k][0] + ' glitter added!' + (S.mode === 'challenge' ? ' +' + 50 * cost + '  +' + GLITTER_BONUS_TIME + 's' : ''));
+    checkPerfect();
   }
   function slimeReady() {
+    checkPerfect();
     burst(home.x, home.y, 60, true);
     sndChime([523, 659, 784, 1047]);
     if (S.mode === 'challenge') {
@@ -504,7 +530,7 @@
   }
   function newSlime() {
     S.progress = 0; S.phase = 1; S.lastMove = null; S.repeat = 0; S.switchStreak = 0; S.speed = 1; S.glitter = false; S.glitters = [];
-    fieldReset();
+    fieldReset(); S.mixedThis = 0; S.brokeThis = false; S.stoneGiven = false;
     makeBubbles(); makeSparkles(); updateGlitters();
   }
   function startGame(mode) {
@@ -513,7 +539,7 @@
       switchStreak: 0, speed: 1, glitter: false, glitters: [], charges: 0, mixedCount: 0, slimes: 0, mixes: 0, bestCombo: 0, lastInput: performance.now() });
     off.fill(0); vel.fill(0); c = { x: home.x, y: home.y }; gReset(); particles = []; trail = []; snapStrs = []; pieces = []; fingers.clear(); primaryId = null;
     fieldReset();
-    Object.assign(S, { swirl: 0, swirlV: 0, adds: 0, stress: 0, broken: false, breaks: 0, warned: false });
+    Object.assign(S, { swirl: 0, swirlV: 0, adds: 0, stones: 0, mixedThis: 0, brokeThis: false, stoneGiven: false, stress: 0, broken: false, breaks: 0, warned: false });
     makeBubbles(); makeSparkles();
     $('menu').classList.add('hidden'); $('endScreen').classList.add('hidden'); $('idle').classList.add('hidden');
     $('timePill').style.visibility = mode === 'challenge' ? 'visible' : 'hidden';
@@ -525,7 +551,7 @@
   function endGame() {
     S.mode = 'end'; stretchStop(); fingers.clear(); pieces = [];
     $('finalScore').textContent = S.score;
-    $('finalInfo').textContent = `${S.slimes} slime${S.slimes === 1 ? '' : 's'} finished, best variety streak ${S.bestCombo}. Leaderboard coming soon.`;
+    $('finalInfo').textContent = `${S.slimes} slime${S.slimes === 1 ? '' : 's'} finished, ${S.stones} Glowstone${S.stones === 1 ? '' : 's'}, best variety streak ${S.bestCombo}. Leaderboard coming soon.`;
     $('endScreen').classList.remove('hidden'); $('swatches').classList.add('hidden'); $('glitters').classList.add('hidden'); $('glitters').classList.add('hidden');
     sndChime([392, 330, 262]);
     setTilt('');
@@ -650,7 +676,7 @@
 
   /* ---------- breaking and rejoining ---------- */
   function breakSlime() {
-    S.broken = true; S.stress = 0; S.warned = false; S.breaks++;
+    S.broken = true; S.stress = 0; S.warned = false; S.breaks++; S.brokeThis = true;
     holders().forEach(h => { h.free = true; }); stretchStop();
     sndSnap(); sndBuzz();
     const n = 5, wts = Array.from({ length: n }, () => 0.5 + Math.random()), tot = wts.reduce((a, b) => a + b, 0), a0 = Math.random() * TAU;
@@ -885,7 +911,7 @@
     ctx2d.clearRect(0, 0, W, H);
     if (S.broken) { drawBroken(now); drawOverlay(now); return; }
     // soft shadow
-    ctx2d.fillStyle = 'rgba(0,0,0,.18)';
+    ctx2d.fillStyle = 'rgba(60,30,110,.28)';
     ctx2d.beginPath(); ctx2d.ellipse(c.x, home.y + R * 1.12, R * 1.05, R * 0.18, 0, 0, TAU); ctx2d.fill();
 
     const base = slimeColor();
@@ -918,6 +944,11 @@
     ctx2d.globalAlpha = alpha; ctx2d.imageSmoothingEnabled = true;
     ctx2d.drawImage(fcv, c.x - R * FIELD_EXT, c.y - R * FIELD_EXT, R * FIELD_EXT * 2, R * FIELD_EXT * 2);
     ctx2d.globalAlpha = 1;
+    if (ART.tex) {                       // glossy gluey texture: reflections and bubbles, strongest while gluey and softer when smooth
+      ctx2d.save(); ctx2d.globalCompositeOperation = 'overlay'; ctx2d.globalAlpha = S.phase === 1 ? 0.95 : S.phase === 2 ? 0.75 : 0.5;
+      ctx2d.translate(c.x, c.y); ctx2d.rotate(S.swirl * 0.2);
+      ctx2d.drawImage(ART.tex, -R * 1.45, -R * 1.45, R * 2.9, R * 2.9); ctx2d.restore();
+    }
     if (stiff) { ctx2d.fillStyle = 'rgba(150,150,160,.25)'; ctx2d.fillRect(c.x - R * 2, c.y - R * 2, R * 4, R * 4); }
     const g = ctx2d.createRadialGradient(c.x - R * 0.35, c.y - R * 0.4, R * 0.1, c.x, c.y, R * 1.12);   // 3D shading on top of the colours
     g.addColorStop(0, 'rgba(255,255,255,.5)'); g.addColorStop(0.55, 'rgba(255,255,255,0)'); g.addColorStop(1, 'rgba(40,20,80,.35)');
@@ -929,7 +960,7 @@
 
     ctx2d.save(); path(); ctx2d.clip();
     // phase 1: bubbles inside
-    if (S.phase === 1) {
+    if (S.phase === 1 && !ART.tex) {
       bubbles.forEach(b => {
         const x = c.x + Math.cos(b.a) * b.d * R, y = c.y + Math.sin(b.a + now / 4000 * b.s) * b.d * R * 0.9;
         ctx2d.fillStyle = 'rgba(255,255,255,.28)'; ctx2d.beginPath(); ctx2d.arc(x, y, b.r, 0, TAU); ctx2d.fill();
@@ -941,7 +972,14 @@
       ctx2d.strokeStyle = 'rgba(255,255,255,.22)'; ctx2d.lineWidth = 2;
       for (let i = 0; i < 6; i++) { ctx2d.beginPath(); ctx2d.moveTo(c.x - R + i * R * 0.35, c.y - R); ctx2d.bezierCurveTo(c.x - R * 0.5 + i * R * 0.3, c.y - R * 0.3, c.x - R * 0.2 + i * R * 0.35, c.y + R * 0.3, c.x - R * 0.7 + i * R * 0.4, c.y + R); ctx2d.stroke(); }
     }
-    // glitter inside
+    // glitter inside: real glitter photo layers (silver / gold / rainbow), turning slowly and twinkling, plus the little sparkles
+    if (S.glitter) S.glitters.forEach((gk, gi) => {
+      const im = ART[GLITTER_ART[gk]]; if (!im) return;
+      ctx2d.save(); ctx2d.globalCompositeOperation = 'screen';
+      ctx2d.globalAlpha = 0.5 + 0.25 * Math.sin(now / 350 + gi * 2);
+      ctx2d.translate(c.x, c.y); ctx2d.rotate(now / 7000 * (gi % 2 ? 1 : -1));
+      ctx2d.drawImage(im, -R * 1.5, -R * 1.5, R * 3, R * 3); ctx2d.restore();
+    });
     if (S.glitter) {
       sparkles.forEach((sp, si) => {
         const x = c.x + Math.cos(sp.a) * sp.d * R, y = c.y + Math.sin(sp.a) * sp.d * R;
@@ -973,7 +1011,7 @@
   requestAnimationFrame(frame);
 
   // test hook (harmless in production; used by automated tests)
-  window.__slime = { S, get trail() { return trail; }, get snapStrs() { return snapStrs; }, get fingers() { return fingers; }, get pieces() { return pieces; }, off, vel, registerMove, step, startGame, addColor, addGlitter, slimeColor, mixColors, colorName, fieldTV, cellColor, get PIG() { return PIG; }, get R() { return R; }, get home() { return home; } };
+  window.__slime = { S, get trail() { return trail; }, get snapStrs() { return snapStrs; }, get fingers() { return fingers; }, get pieces() { return pieces; }, off, vel, registerMove, step, startGame, addColor, addGlitter, slimeColor, mixColors, colorName, fieldTV, cellColor, get PIG() { return PIG; }, get ART() { return ART; }, get R() { return R; }, get home() { return home; } };
 })();
 </script>
 </body>
