@@ -123,13 +123,14 @@
     ['Pink', '#ff7eb6'], ['Mint', '#52d6a0'], ['Lilac', '#b08cff']
   ];
   const GLITTERS = [['Silver', '#eef2ff', 1], ['Gold', '#ffd86b', 1], ['Rainbow', 'rainbow', 2]];   // [name, colour, charges needed in Challenge]
-  const BLEND_PER_MOVE = 0.07;        // blend 0..1: about 14 good moves to fully mix a new color
+  const GS = 28, FIELD_EXT = 1.3;     // colour map inside the slime: GS x GS cells covering +-1.3 R
+  const MIX_ITER = 8, DIFFUSE = 0.2, MEAN_PULL = 0.003, TV_DONE = 0.045;   // mixing speed (tune in playtests)
 
   /* ---------- state ---------- */
   const S = {
     mode: 'menu', paused: false, t: START_TIME, score: 0, progress: 0, phase: 1,
     lastMove: null, repeat: 0, switchStreak: 0, speed: 1, lastMoveAt: 0,
-    glitter: false, glitters: [], charges: 0, mixedCount: 0, stress: 0, broken: false, breaks: 0, warned: false, slimes: 0, base: MILK.slice(), add: null, addW: 0.5, blend: 0, swirl: 0, swirlV: 0, fresh: true, fx: true, snd: true, lastInput: 0,
+    glitter: false, glitters: [], charges: 0, mixedCount: 0, stress: 0, broken: false, breaks: 0, warned: false, slimes: 0, mixBudget: 0, stirV: 0, stirH: 0, pendingMix: false, adds: 0, swirl: 0, swirlV: 0, fx: true, snd: true, lastInput: 0,
     done: false, mixes: 0, bestCombo: 0
   };
   let W = 0, H = 0, R = 100, home = { x: 0, y: 0 }, c = { x: 0, y: 0 };
@@ -257,7 +258,123 @@
     const n = names.find(x => h < x[0])[1];
     return (l > 0.8 ? 'Pastel ' : '') + n;
   }
-  function slimeColor() { return S.add ? mixColors(S.base, S.add, S.addW * Math.min(1, S.blend)) : S.base; }
+
+  /* ---------- colour field: pigments inside the slime that you mix with your moves ---------- */
+  const DEG = Math.PI / 180;
+  const PIG = SWATCHES.map(sw => hexToRgb(sw[1])).concat([MILK]);        // pigments: the 6 colours + milky base
+  const NP = PIG.length, MILK_I = NP - 1;
+  const PH = PIG.map((c0, k) => k === MILK_I ? [0, 0, 0.9] : toHsl(c0));    // hue, saturation, lightness per pigment
+  let fld = new Float32Array(GS * GS * NP), fld2 = new Float32Array(GS * GS * NP);
+  const fcv = document.createElement('canvas'); fcv.width = fcv.height = GS;
+  const fctx = fcv.getContext('2d'), fimg = fctx.createImageData(GS, GS);
+  let fieldDirty = true, statDirty = true, meanC = MILK.slice(), tvC = 0, fieldAt = 0;
+  const cellU = g => ((g + 0.5) / GS * 2 - 1) * FIELD_EXT;
+  // paint-like colour from pigment amounts: hues blend round the wheel, opposite hues cancel to a muddy colour
+  function pigColor(a, o) {
+    let vx = 0, vy = 0, l = 0, ss = 0;
+    for (let k = 0; k < NP; k++) {
+      const w = a[o + k]; if (w <= 0) continue;
+      const h = PH[k]; vx += w * h[1] * Math.cos(h[0] * DEG); vy += w * h[1] * Math.sin(h[0] * DEG); l += w * h[2]; ss += w * h[1];
+    }
+    // opposite hues cancel only partly (blue + yellow stays a green, not grey)
+    const len = Math.hypot(vx, vy), sat = Math.min(1, ss * (0.45 + 0.55 * (ss > 1e-6 ? len / ss : 1))), hue = len < 1e-5 ? 0 : (Math.atan2(vy, vx) / DEG + 360) % 360;
+    return fromHsl([hue, sat, l]);
+  }
+  function fieldReset() {
+    fld.fill(0); for (let i = 0; i < GS * GS; i++) fld[i * NP + MILK_I] = 1;
+    S.pendingMix = false; S.mixBudget = 0; S.stirV = 0; S.stirH = 0; fieldDirty = statDirty = true;
+  }
+  function fieldSplat(u0, v0, rad, k, a) {
+    for (let gy = 0; gy < GS; gy++) for (let gx = 0; gx < GS; gx++) {
+      const du = cellU(gx) - u0, dv = cellU(gy) - v0, w = a * Math.exp(-(du * du + dv * dv) / (rad * rad));
+      if (w < 0.01) continue;
+      const o = (gy * GS + gx) * NP;
+      let gain = 0;                      // new colour takes the room of the milky base first, other colours are only pushed aside by half
+      for (let j = 0; j < NP; j++) { if (j === k) continue; const t = fld[o + j] * (j === MILK_I ? w : w * 0.4); fld[o + j] -= t; gain += t; }
+      fld[o + k] += gain;
+    }
+    fieldDirty = statDirty = true;
+  }
+  // stirring: rotation (inner part turns faster, which draws streaks into spirals) plus folds from up-down / left-right moves
+  function fieldAdvect(dth, shx, shy, ph) {
+    for (let gy = 0; gy < GS; gy++) for (let gx = 0; gx < GS; gx++) {
+      let u = cellU(gx), v = cellU(gy);
+      const r = Math.min(1.2, Math.hypot(u, v)), th = dth * (1.25 - 0.8 * Math.min(1, r)) * (r < 1.15 ? 1 : 0);
+      const cs = Math.cos(-th), sn = Math.sin(-th);
+      let us = u * cs - v * sn, vs = u * sn + v * cs;
+      if (shx) us += shx * Math.sin(3 * vs + ph);
+      if (shy) vs += shy * Math.sin(3 * us + ph * 1.3);
+      let fx = (us / FIELD_EXT + 1) / 2 * GS - 0.5, fy = (vs / FIELD_EXT + 1) / 2 * GS - 0.5;
+      fx = clamp(fx, 0, GS - 1.001); fy = clamp(fy, 0, GS - 1.001);
+      const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0, o = (gy * GS + gx) * NP;
+      const a = (y0 * GS + x0) * NP, b = a + NP, c1 = a + GS * NP, d = c1 + NP;
+      for (let j = 0; j < NP; j++) fld2[o + j] = (fld[a + j] * (1 - tx) + fld[b + j] * tx) * (1 - ty) + (fld[c1 + j] * (1 - tx) + fld[d + j] * tx) * ty;
+    }
+    const t = fld; fld = fld2; fld2 = t; fieldDirty = statDirty = true;
+  }
+  function fieldDiffuse(meanW) {
+    for (let gy = 0; gy < GS; gy++) for (let gx = 0; gx < GS; gx++) {
+      const o = (gy * GS + gx) * NP, l = gx > 0 ? o - NP : o, r = gx < GS - 1 ? o + NP : o, up = gy > 0 ? o - GS * NP : o, dn = gy < GS - 1 ? o + GS * NP : o;
+      for (let j = 0; j < NP; j++) {
+        const v = fld[o + j];
+        fld2[o + j] = v + DIFFUSE * (fld[l + j] + fld[r + j] + fld[up + j] + fld[dn + j] - 4 * v) + MEAN_PULL * (meanW[j] - v);
+      }
+    }
+    const t = fld; fld = fld2; fld2 = t;
+  }
+  const meanW = new Float32Array(NP);
+  function fieldStats() {
+    meanW.fill(0); let n = 0;
+    for (let gy = 0; gy < GS; gy++) for (let gx = 0; gx < GS; gx++) {
+      const u = cellU(gx), v = cellU(gy); if (u * u + v * v > 1) continue;
+      const o = (gy * GS + gx) * NP; n++;
+      for (let j = 0; j < NP; j++) meanW[j] += fld[o + j];
+    }
+    for (let j = 0; j < NP; j++) meanW[j] /= n;
+    let tv = 0;
+    for (let gy = 0; gy < GS; gy++) for (let gx = 0; gx < GS; gx++) {
+      const u = cellU(gx), v = cellU(gy); if (u * u + v * v > 1) continue;
+      const o = (gy * GS + gx) * NP; let d = 0;
+      for (let j = 0; j < NP; j++) d += Math.abs(fld[o + j] - meanW[j]);
+      tv += d / 2;
+    }
+    tvC = tv / n; meanC = pigColor(meanW, 0); statDirty = false;
+  }
+  function slimeColor() { if (statDirty) fieldStats(); return meanC; }
+  function fieldTV() { if (statDirty) fieldStats(); return tvC; }
+  function cellColor(u, v) {
+    const gx = clamp(Math.round((u / FIELD_EXT + 1) / 2 * GS - 0.5), 0, GS - 1), gy = clamp(Math.round((v / FIELD_EXT + 1) / 2 * GS - 0.5), 0, GS - 1);
+    return pigColor(fld, (gy * GS + gx) * NP);
+  }
+  // per frame: spend the mixing work from your moves on stirring and diffusing, so the colours blend gradually and unevenly
+  let iterCarry = 0;
+  function fieldStep(dt, f) {
+    const dth = S.swirlV * f * 0.12;
+    if (Math.abs(dth) > 1e-4) fieldAdvect(dth, 0, 0, 0);
+    const kq = 1 - Math.exp(-dt / 0.3);
+    const qv = S.stirV * kq, qh = S.stirH * kq; S.stirV -= qv; S.stirH -= qh;
+    if (qv > 1e-4 || qh > 1e-4) fieldAdvect(0, qh, qv, S.swirl);
+    const q = S.mixBudget * kq; S.mixBudget -= q;
+    iterCarry += q * MIX_ITER;
+    let it = Math.min(6, Math.floor(iterCarry)); iterCarry -= it;
+    if (it > 0) { if (statDirty) fieldStats(); for (; it > 0; it--) fieldDiffuse(meanW); fieldDirty = statDirty = true; }
+    if (S.pendingMix && statDirty && performance.now() - fieldAt > 100) {
+      fieldAt = performance.now();
+      if (fieldTV() < TV_DONE) colorMixedDone();
+    }
+  }
+  function colorMixedDone() {
+    S.pendingMix = false; S.mixedCount++;
+    burst(home.x, home.y, 18, true); sndChime([659, 784]);
+    if (S.mode === 'challenge') S.score += 40;
+    toast('Color mixed: ' + colorName(slimeColor()) + (S.mode === 'challenge' ? '  +40' : ''));
+  }
+  function fieldPaint() {            // upload the colour map to the small canvas (smoothly scaled up when drawing)
+    if (!fieldDirty) return;
+    for (let i = 0; i < GS * GS; i++) { const c0 = pigColor(fld, i * NP); fimg.data[i * 4] = c0[0]; fimg.data[i * 4 + 1] = c0[1]; fimg.data[i * 4 + 2] = c0[2]; fimg.data[i * 4 + 3] = 255; }
+    fctx.putImageData(fimg, 0, 0); fieldDirty = false;
+  }
+  fieldReset();
   const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
   const rgba = (a, al) => `rgba(${a[0]},${a[1]},${a[2]},${al})`;
 
@@ -326,12 +443,10 @@
     const ph = Math.random() * TAU;
     for (let i = 0; i < N; i++) vel[i] += (type === 'V' ? -0.5 + Math.sin(ang[i] * 2 + ph) * 0.4 : Math.sin(ang[i] * 2 + ph)) * kick;
     popBadge(`${MOVE_LABEL[type]}${S.mode === 'challenge' ? ' +' + pts : ''}${S.switchStreak >= 2 ? '  x' + mult.toFixed(2) : ''}`, S.repeat > 1);
-    // colour blending: a freshly added colour mixes in slowly, move by move
+    // your moves stir the colours: circles swirl them, up-down and left-right moves fold them, and every move spends mixing work
     S.swirlV += (type === 'R' ? 0.28 : type === 'L' ? -0.28 : 0.16) * (0.5 + S.speed);
-    if (S.add) {
-      S.blend = Math.min(1, S.blend + BLEND_PER_MOVE * S.speed);
-      if (S.blend >= 1) finishBlend();
-    }
+    S.mixBudget = Math.min(6, S.mixBudget + S.speed);
+    if (type === 'V') S.stirV += 0.05 * S.speed; else if (type === 'H') S.stirH += 0.05 * S.speed;
     // progress
     if (S.progress < 100) {
       S.progress = Math.min(100, S.progress + 3.2 * S.speed);
@@ -342,20 +457,18 @@
     // glitter: 5 different moves in a row
     if (S.mode === 'challenge' && S.switchStreak > 0 && S.switchStreak % 5 === 0) earnCharge();
   }
-  function finishBlend() {
-    S.base = mixColors(S.base, S.add, S.addW); S.add = null; S.blend = 0; S.fresh = false; S.mixedCount++;
-    burst(home.x, home.y, 18, true);
-    sndChime([659, 784]);
-    if (S.mode === 'challenge') S.score += 40;
-    toast('Color mixed: ' + colorName(S.base) + (S.mode === 'challenge' ? '  +40' : ''));
-  }
-  // add a colour on top of the slime; it does NOT change the slime right away, it has to be mixed in
+  // add a colour: it lands as a patch (plus a few drips) and does NOT change the whole slime, it has to be mixed in
   function addColor(i, silent) {
     if (S.mode !== 'chill' && S.mode !== 'challenge') return;
-    if (S.add) { S.base = slimeColor(); }           // fold a half-mixed colour in before the next one drops
-    S.add = hexToRgb(SWATCHES[i][1]); S.blend = 0;
-    S.addW = S.fresh ? 0.85 : 0.5;                  // first colour on plain base is strong, later ones are half-half
-    dropBurst(S.add);
+    const a = Math.random() * TAU, d = Math.random() * 0.35, u0 = Math.cos(a) * d, v0 = Math.sin(a) * d;
+    fieldSplat(u0, v0, 0.8, i, 0.95);
+    for (let k = 0; k < 3; k++) { const b = Math.random() * TAU; fieldSplat(u0 + Math.cos(b) * 0.6, v0 + Math.sin(b) * 0.6, 0.3, i, 0.9); }
+    // make sure every colour adds a fair amount: the first on plain base is strong, later ones are about equal to what is already there
+    fieldStats();
+    const target = 1 - meanW[MILK_I] < 0.15 ? 0.85 : 0.4;
+    for (let t = 0; t < 5 && meanW[i] < target; t++) { const b = Math.random() * TAU; fieldSplat(Math.cos(b) * 0.45, Math.sin(b) * 0.45, 0.5, i, 0.9); fieldStats(); }
+    S.pendingMix = true; S.adds++;
+    dropBurst(PIG[i]);
     if (!silent) { sndSquish(1); toast(SWATCHES[i][0] + ' added. Now mix it in!'); }
   }
   function dropBurst(col) {
@@ -391,7 +504,7 @@
   }
   function newSlime() {
     S.progress = 0; S.phase = 1; S.lastMove = null; S.repeat = 0; S.switchStreak = 0; S.speed = 1; S.glitter = false; S.glitters = [];
-    S.base = MILK.slice(); S.add = null; S.blend = 0; S.fresh = true;
+    fieldReset();
     makeBubbles(); makeSparkles(); updateGlitters();
   }
   function startGame(mode) {
@@ -399,7 +512,8 @@
     Object.assign(S, { mode, paused: false, t: START_TIME, score: 0, progress: 0, phase: 1, lastMove: null, repeat: 0,
       switchStreak: 0, speed: 1, glitter: false, glitters: [], charges: 0, mixedCount: 0, slimes: 0, mixes: 0, bestCombo: 0, lastInput: performance.now() });
     off.fill(0); vel.fill(0); c = { x: home.x, y: home.y }; gReset(); particles = []; trail = []; snapStrs = []; pieces = []; fingers.clear(); primaryId = null;
-    Object.assign(S, { base: MILK.slice(), add: null, blend: 0, fresh: true, swirl: 0, swirlV: 0, stress: 0, broken: false, breaks: 0, warned: false });
+    fieldReset();
+    Object.assign(S, { swirl: 0, swirlV: 0, adds: 0, stress: 0, broken: false, breaks: 0, warned: false });
     makeBubbles(); makeSparkles();
     $('menu').classList.add('hidden'); $('endScreen').classList.add('hidden'); $('idle').classList.add('hidden');
     $('timePill').style.visibility = mode === 'challenge' ? 'visible' : 'hidden';
@@ -443,6 +557,7 @@
     $('speedFill').style.width = clamp(S.speed / 1.5, 0.05, 1) * 100 + '%';
     $('progFill').style.width = S.progress + '%';
     $('phaseLabel').textContent = S.broken ? 'Slime broke! Drag the pieces together' : PHASE_NAMES[S.phase] + (S.speed < 0.6 ? '  (slime is stiff! change your move)' : '');
+    if (S.pendingMix && !S.broken) $('phaseLabel').textContent += '  ·  color ' + Math.round(clamp(1 - fieldTV() / 0.1, 0, 1) * 100) + '% mixed';
     $('stressRow').style.visibility = !S.broken && S.stress > 0.04 ? 'visible' : 'hidden';
     $('stressFill').style.width = Math.min(100, S.stress * 100) + '%';
   }
@@ -662,7 +777,8 @@
     const n = Math.max(1, Math.ceil(f - 1e-6));
     for (let j = 0; j < n; j++) physics(f / n);
     if (S.broken) updatePieces(f);
-    S.swirl += S.swirlV * f; S.swirlV *= Math.pow(0.95, f);   // colour streaks swirl with your moves
+    fieldStep(dt, f);
+    S.swirl += S.swirlV * f; S.swirlV *= Math.pow(0.95, f);   // your moves swirl the colours
     // slime marks fade away
     for (let i = trail.length - 1; i >= 0; i--) { trail[i].life -= dt / 2.2; if (trail[i].life <= 0) trail.splice(i, 1); }
     for (let i = snapStrs.length - 1; i >= 0; i--) { snapStrs[i].life -= dt * 3.5; if (snapStrs[i].life <= 0) snapStrs.splice(i, 1); }
@@ -797,25 +913,21 @@
       ctx2d.closePath();
     };
     // body
-    const g = ctx2d.createRadialGradient(c.x - R * 0.35, c.y - R * 0.4, R * 0.1, c.x, c.y, R * 1.12);
-    g.addColorStop(0, rgba(light, alpha)); g.addColorStop(0.55, rgba(body, alpha)); g.addColorStop(1, rgba(mix(body, dark, 0.55), alpha));
-    ctx2d.fillStyle = g; path(); ctx2d.fill();
+    fieldPaint();
+    path(); ctx2d.save(); ctx2d.clip();
+    ctx2d.globalAlpha = alpha; ctx2d.imageSmoothingEnabled = true;
+    ctx2d.drawImage(fcv, c.x - R * FIELD_EXT, c.y - R * FIELD_EXT, R * FIELD_EXT * 2, R * FIELD_EXT * 2);
+    ctx2d.globalAlpha = 1;
+    if (stiff) { ctx2d.fillStyle = 'rgba(150,150,160,.25)'; ctx2d.fillRect(c.x - R * 2, c.y - R * 2, R * 4, R * 4); }
+    const g = ctx2d.createRadialGradient(c.x - R * 0.35, c.y - R * 0.4, R * 0.1, c.x, c.y, R * 1.12);   // 3D shading on top of the colours
+    g.addColorStop(0, 'rgba(255,255,255,.5)'); g.addColorStop(0.55, 'rgba(255,255,255,0)'); g.addColorStop(1, 'rgba(40,20,80,.35)');
+    ctx2d.fillStyle = g; ctx2d.fillRect(c.x - R * 2, c.y - R * 2, R * 4, R * 4);
+    ctx2d.restore();
     const rim = mix(dark, [255, 70, 80], Math.min(1, S.stress * 1.2));   // rim turns red when it is close to breaking
     ctx2d.lineWidth = 4 + S.stress * 6; ctx2d.strokeStyle = rgba(rim, 0.7 + 0.3 * S.stress); ctx2d.stroke();
     ctx2d.lineWidth = 1.5; ctx2d.strokeStyle = 'rgba(255,255,255,.55)'; ctx2d.stroke();
 
     ctx2d.save(); path(); ctx2d.clip();
-    // a freshly added colour: streaks that swirl around and fade as they get mixed in
-    if (S.add) {
-      const k = 1 - Math.min(1, S.blend), col = S.add;
-      for (let i = 0; i < 5; i++) {
-        const a = S.swirl * (1 + i * 0.15) + i * TAU / 5, d = R * (0.12 + 0.5 * k) * (0.6 + 0.4 * ((i * 37) % 5) / 4);
-        const x = c.x + Math.cos(a) * d, y = c.y + Math.sin(a) * d * 0.85, r = R * (0.2 + 0.28 * k);
-        const gg = ctx2d.createRadialGradient(x, y, 0, x, y, r);
-        gg.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},${0.85 * k})`); gg.addColorStop(1, `rgba(${col[0]},${col[1]},${col[2]},0)`);
-        ctx2d.fillStyle = gg; ctx2d.beginPath(); ctx2d.arc(x, y, r, 0, TAU); ctx2d.fill();
-      }
-    }
     // phase 1: bubbles inside
     if (S.phase === 1) {
       bubbles.forEach(b => {
@@ -861,7 +973,7 @@
   requestAnimationFrame(frame);
 
   // test hook (harmless in production; used by automated tests)
-  window.__slime = { S, get trail() { return trail; }, get snapStrs() { return snapStrs; }, get fingers() { return fingers; }, get pieces() { return pieces; }, off, vel, registerMove, step, startGame, addColor, addGlitter, slimeColor, mixColors, colorName, get R() { return R; }, get home() { return home; } };
+  window.__slime = { S, get trail() { return trail; }, get snapStrs() { return snapStrs; }, get fingers() { return fingers; }, get pieces() { return pieces; }, off, vel, registerMove, step, startGame, addColor, addGlitter, slimeColor, mixColors, colorName, fieldTV, cellColor, get PIG() { return PIG; }, get R() { return R; }, get home() { return home; } };
 })();
 </script>
 </body>

@@ -131,36 +131,44 @@ with sync_playwright() as p:
     check("idle pauses timer", page.evaluate("__slime.S.paused"))
     t_a = page.evaluate("__slime.S.t"); page.wait_for_timeout(400); t_b = page.evaluate("__slime.S.t")
     check("timer frozen while paused", abs(t_a - t_b) < 1e-6, (t_a, t_b))
-    # ---- colour mixing
+    # ---- colour mixing (colour map inside the slime)
+    import colorsys
+    def hue(rgb): return colorsys.rgb_to_hls(*(v / 255 for v in rgb))[0] * 360
+    def mixmoves(n, seq='RLVH'):
+        for k in range(n):
+            page.evaluate(f"__slime.registerMove('{seq[k % len(seq)]}')")
+            page.evaluate("for (let i = 0; i < 24; i++) __slime.step(1/60)")
     page.evaluate("__slime.startGame('chill')")
-    check("new slime starts as plain milky base", page.evaluate("__slime.S.base") == [243, 238, 252] and page.evaluate("__slime.S.add") is None)
+    check("new slime starts plain milky white", page.evaluate("__slime.colorName(__slime.slimeColor())") == "Milky white" and page.evaluate("__slime.fieldTV()") < 0.001)
     page.evaluate("__slime.addColor(1, true)")   # Sunny (yellow)
-    c0 = page.evaluate("__slime.slimeColor()")
-    check("added colour does NOT change the slime right away", c0 == [243, 238, 252], c0)
-    for m in ['R','L','V','R','L','V','R','L','V','R','L','V','R','L','V','R']: page.evaluate(f"__slime.registerMove('{m}')")
-    yellow = page.evaluate("__slime.S.base")
-    check("after mixing, slime has taken the colour (yellow)", page.evaluate("__slime.colorName(__slime.S.base)").endswith("Yellow"), page.evaluate("__slime.colorName(__slime.S.base)"))
-    page.evaluate("__slime.addColor(0, true)")   # Red on yellow
-    mid_hues = []
-    for m in ['R','L','V','R','L','V']:
-        page.evaluate(f"__slime.registerMove('{m}')"); mid_hues.append(page.evaluate("__slime.slimeColor()"))
-    check("colour shifts gradually while mixing (not instant)", mid_hues[0] != mid_hues[-1] and page.evaluate("__slime.S.add") is not None, mid_hues[0])
-    page.screenshot(path="/tmp/shots/mixing_mid.png")
-    for m in ['R','L','V','R','L','V','R','L','V','R']: page.evaluate(f"__slime.registerMove('{m}')")
-    nm = page.evaluate("__slime.colorName(__slime.S.base)")
+    tv0 = page.evaluate("__slime.fieldTV()")
+    check("a new colour lands as uneven patches, not over the whole slime", tv0 > 0.1, round(tv0, 3))
+    far = page.evaluate("[__slime.cellColor(0, 0), __slime.cellColor(0.95, 0.0), __slime.cellColor(-0.95, 0.0), __slime.cellColor(0, 0.95), __slime.cellColor(0, -0.95)]")
+    check("colour differs from place to place right after adding", max(max(abs(a - b) for a, b in zip(far[0], c)) for c in far[1:]) > 25, far)
+    mixmoves(4); tv1 = page.evaluate("__slime.fieldTV()")
+    mixmoves(4); tv2 = page.evaluate("__slime.fieldTV()")
+    check("moves blend it slowly: unevenness shrinks step by step", tv0 > tv1 > tv2 > 0.005 and page.evaluate("__slime.S.pendingMix"), (round(tv0, 3), round(tv1, 3), round(tv2, 3)))
+    mixmoves(12)
+    check("after enough mixing the colour is even and counted as mixed", not page.evaluate("__slime.S.pendingMix") and page.evaluate("__slime.S.mixedCount") == 1, page.evaluate("__slime.S.mixedCount"))
+    check("yellow slime is yellow", 35 < hue(page.evaluate("__slime.slimeColor()")) < 75, page.evaluate("__slime.slimeColor()"))
+    page.evaluate("__slime.addColor(0, true)")   # red into yellow
+    mixmoves(24)
+    nm = page.evaluate("__slime.colorName(__slime.slimeColor())")
     check("red + yellow = orange", "Orange" in nm, nm)
-    page.evaluate("__slime.startGame('chill'); __slime.addColor(2, true)")  # blue then yellow = green
-    for m in ['R','L','V']*6: page.evaluate(f"__slime.registerMove('{m}')")
-    page.evaluate("__slime.addColor(1, true)")
-    for m in ['R','L','V']*6: page.evaluate(f"__slime.registerMove('{m}')")
-    nm2 = page.evaluate("__slime.colorName(__slime.S.base)")
-    check("blue + yellow = green (not grey)", any(k in nm2 for k in ("Green", "Lime", "Teal")), nm2)
+    page.evaluate("__slime.startGame('chill'); __slime.addColor(2, true)")  # blue, then yellow
+    mixmoves(10); page.evaluate("__slime.addColor(1, true)"); mixmoves(26)
+    hh = hue(page.evaluate("__slime.slimeColor()"))
+    check("blue + yellow = green-ish (not grey)", 65 < hh < 190, round(hh))
+    # several colours at the same time
+    page.evaluate("__slime.startGame('chill'); __slime.addColor(0, true); __slime.addColor(2, true); __slime.addColor(4, true)")
+    tvm = page.evaluate("__slime.fieldTV()"); mixmoves(6)
+    check("3 colours at once mix together at the same time", page.evaluate("__slime.fieldTV()") < tvm and page.evaluate("__slime.S.pendingMix"), round(tvm, 3))
+    page.evaluate("__slime.registerMove('R')"); a1 = page.evaluate("__slime.fieldTV()")
+    page.evaluate("__slime.S.speed = 0.25"); sp_slow = page.evaluate("__slime.S.speed")
     page.evaluate("__slime.startGame('challenge')")
     check("challenge shows colour and glitter buttons", page.is_visible("#swatches") and page.is_visible("#glitters"))
-    check("challenge starts plain, you choose the colour", page.evaluate("__slime.S.add") is None)
-    page.evaluate("__slime.addColor(0, true)")
-    s_before = page.evaluate("__slime.S.score")
-    for m in ['R','L','V']*6: page.evaluate(f"__slime.registerMove('{m}')")
+    check("challenge starts plain, you choose the colour", not page.evaluate("__slime.S.pendingMix"))
+    page.evaluate("__slime.addColor(0, true)"); mixmoves(22)
     check("challenge: fully mixed colour counted (+40 bonus)", page.evaluate("__slime.S.mixedCount") == 1, page.evaluate("__slime.S.mixedCount"))
     page.evaluate("__slime.startGame('chill')")
     page.evaluate("__slime.addGlitter(2)")
@@ -168,7 +176,6 @@ with sync_playwright() as p:
     page.screenshot(path="/tmp/shots/chill_rainbow.png")
     page.evaluate("__slime.startGame('challenge')")
     page.screenshot(path="/tmp/shots/challenge_ui.png")
-    page.evaluate("__slime.S.lastInput = performance.now()")
     # ---- left-right swipe, slime marks, stretch strand
     page.evaluate("__slime.startGame('chill')")
     home = page.evaluate("({x: __slime.home.x, y: __slime.home.y, R: __slime.R})"); cx, cy, R = home["x"], home["y"], home["R"]

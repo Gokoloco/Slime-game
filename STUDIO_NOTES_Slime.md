@@ -71,3 +71,11 @@ Single `docs/index.html`, assets in `docs/assets`, hosted free first (GitHub Pag
 - Gestures (circles, swipes) only count with one finger on the screen.
 - Tests: 50 headless checks (synthetic multi-pointer events). NOT tested with real multi-touch on a phone: that is the first thing to check (iOS Safari multi-touch, browser gestures, palm touches).
 - To tune after play: stress speed (0.8/s), limits per phase, merge distance (0.8), piece attraction (0.06), penalties.
+
+## Colour field: marbled, uneven, multi-colour mixing (v0.6, 21 Nov 2026)
+- The slime now has a colour map (28 x 28 cells, 6 pigments + milky base). Tapping a colour drops a big patch plus a few drips at a random spot; the rest stays milky. Several colours can be added at once and mix at the same time.
+- Moves stir it: circles swirl the colours (inner part turns faster = spirals), up-down and left-right moves fold them, every move spends "mixing work" that diffuses the colours. Better variety = faster. Repeating = slow (stiff slime barely mixes).
+- Paint-like mixing: red + yellow = orange, blue + yellow = green (partly cancelling opposite hues, so it never turns plain grey). A later colour takes room from the milky base first and only pushes older colours aside by 40%.
+- Done = unevenness (TV) below 0.045; Challenge pays +40 once per added colour. Label shows "color N% mixed". Pace about 12-18 good moves per colour.
+- Numbers to tune: MIX_ITER 8, DIFFUSE 0.2, MEAN_PULL 0.003, TV_DONE 0.045, target colour amount 0.85 first / 0.4 later.
+- 53 headless checks pass (run twice). Colours still look pastel on purpose; not tested on a real phone. Performance on slow phones is unchecked (field update every frame while mixing).
