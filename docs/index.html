@@ -42,6 +42,12 @@
   #swatches{position:absolute;left:0;right:0;bottom:calc(max(env(safe-area-inset-bottom),14px) + 82px);display:flex;justify-content:center;gap:10px}
   .sw{width:34px;height:34px;border-radius:50%;border:3px solid rgba(255,255,255,.5);box-shadow:0 2px 0 rgba(0,0,0,.25);cursor:pointer}
   .sw.sel{border-color:#fff;transform:scale(1.15)}
+  #glitters{position:absolute;left:0;right:0;bottom:calc(max(env(safe-area-inset-bottom),14px) + 130px);display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px 8px;padding:0 8px}
+  .gl{padding:6px 11px;border-radius:16px;font-size:13px;font-weight:800;background:rgba(255,255,255,.2);border:2px solid rgba(255,255,255,.5);cursor:pointer;white-space:nowrap}
+  .gl.locked{opacity:.4}
+  .gl.ready{border-color:#ffe27a;animation:pulse .6s infinite alternate}
+  #glInfo{font-size:12px;font-weight:700;opacity:.85;width:100%;text-align:center;order:-1}
+  #glInfo:empty{display:none}
   .final{font-size:46px;font-weight:800}
 </style>
 </head>
@@ -60,6 +66,7 @@
 
   <div id="moveBadge"></div>
   <div id="toast"></div>
+  <div id="glitters" class="hidden"></div>
   <div id="swatches" class="hidden"></div>
 
   <div class="meters" id="meters">
@@ -70,7 +77,8 @@
 
   <div class="overlay" id="menu">
     <h1>Slime</h1>
-    <p class="sub">Mix it, stretch it, make it perfect. Use your finger: circles left and right, and up and down. Mix it up for speed!</p>
+    <p class="sub">Mix with your finger: circles left, circles right, and up-down. Switching moves mixes faster!</p>
+    <p class="sub" style="font-size:14px;opacity:.85"><b>Chill:</b> no timer. Tap colors and glitter to add them, then mix.<br><b>Challenge:</b> 45 seconds. Every move scores. A color fully mixed in = +40. 5 different moves in a row = a glitter charge (+50 and +3 s when you use it).</p>
     <button class="b-chill" id="goChill">Chill mode</button>
     <button class="b-chal" id="goChal">Challenge mode</button>
     <p class="sub" style="font-size:12px;opacity:.6">Prototype. Names and art are placeholders.</p>
@@ -110,13 +118,14 @@
     ['Red',  '#ff4d63'], ['Sunny', '#ffd23f'], ['Sky', '#3fa9ff'],
     ['Pink', '#ff7eb6'], ['Mint', '#52d6a0'], ['Lilac', '#b08cff']
   ];
+  const GLITTERS = [['Silver', '#eef2ff', 1], ['Gold', '#ffd86b', 1], ['Rainbow', 'rainbow', 2]];   // [name, colour, charges needed in Challenge]
   const BLEND_PER_MOVE = 0.07;        // blend 0..1: about 14 good moves to fully mix a new color
 
   /* ---------- state ---------- */
   const S = {
     mode: 'menu', paused: false, t: START_TIME, score: 0, progress: 0, phase: 1,
     lastMove: null, repeat: 0, switchStreak: 0, speed: 1, lastMoveAt: 0,
-    glitter: false, slimes: 0, base: MILK.slice(), add: null, addW: 0.5, blend: 0, swirl: 0, swirlV: 0, fresh: true, fx: true, snd: true, lastInput: 0,
+    glitter: false, glitters: [], charges: 0, mixedCount: 0, slimes: 0, base: MILK.slice(), add: null, addW: 0.5, blend: 0, swirl: 0, swirlV: 0, fresh: true, fx: true, snd: true, lastInput: 0,
     done: false, mixes: 0, bestCombo: 0
   };
   let W = 0, H = 0, R = 100, home = { x: 0, y: 0 }, c = { x: 0, y: 0 };
@@ -320,13 +329,14 @@
       if (S.progress >= 100) slimeReady();
     }
     // glitter: 5 different moves in a row
-    if (S.switchStreak > 0 && S.switchStreak % 5 === 0) glitterUnlock();
+    if (S.mode === 'challenge' && S.switchStreak > 0 && S.switchStreak % 5 === 0) earnCharge();
   }
   function finishBlend() {
-    S.base = mixColors(S.base, S.add, S.addW); S.add = null; S.blend = 0; S.fresh = false;
+    S.base = mixColors(S.base, S.add, S.addW); S.add = null; S.blend = 0; S.fresh = false; S.mixedCount++;
     burst(home.x, home.y, 18, true);
     sndChime([659, 784]);
-    toast('Color mixed: ' + colorName(S.base));
+    if (S.mode === 'challenge') S.score += 40;
+    toast('Color mixed: ' + colorName(S.base) + (S.mode === 'challenge' ? '  +40' : ''));
   }
   // add a colour on top of the slime; it does NOT change the slime right away, it has to be mixed in
   function addColor(i, silent) {
@@ -342,14 +352,22 @@
     for (let i = 0; i < 16; i++) particles.push({ x: home.x + (Math.random() - 0.5) * R * 0.8, y: home.y - R * 1.5 - Math.random() * R * 0.4,
       vx: (Math.random() - 0.5) * 1.5, vy: 3 + Math.random() * 4, life: 1, size: 3 + Math.random() * 5, col: rgb });
   }
-  function glitterUnlock() {
-    S.glitter = true;
-    burst(home.x, home.y, 46, true);
-    sndChime([784, 988, 1175, 1568]);
+  function earnCharge() {
+    S.charges++; sndChime([784, 988]); updateGlitters();
+    toast('Glitter charge! Tap a glitter below');
+  }
+  // Chill: glitter is free. Challenge: costs charges, pays +50 per charge and +3 s.
+  function addGlitter(k) {
+    if (S.mode !== 'chill' && S.mode !== 'challenge') return;
+    const cost = GLITTERS[k][2];
     if (S.mode === 'challenge') {
-      S.score += 50; S.t = Math.min(MAX_TIME, S.t + GLITTER_BONUS_TIME);
-      toast(`Glitter! +50  +${GLITTER_BONUS_TIME}s`);
-    } else toast('Glitter!');
+      if (S.charges < cost) { toast(cost > 1 ? 'Rainbow needs ' + cost + ' charges' : 'Locked: 5 different moves in a row = 1 charge'); return; }
+      S.charges -= cost; S.score += 50 * cost; S.t = Math.min(MAX_TIME, S.t + GLITTER_BONUS_TIME);
+    }
+    if (!S.glitters.includes(k)) S.glitters.push(k);
+    S.glitter = true;
+    burst(home.x, home.y, 46, true); sndChime([784, 988, 1175, 1568]); updateGlitters();
+    toast(GLITTERS[k][0] + ' glitter added!' + (S.mode === 'challenge' ? ' +' + 50 * cost + '  +' + GLITTER_BONUS_TIME + 's' : ''));
   }
   function slimeReady() {
     burst(home.x, home.y, 60, true);
@@ -361,35 +379,33 @@
     } else toast('Your slime is ready!');
   }
   function newSlime() {
-    S.progress = 0; S.phase = 1; S.lastMove = null; S.repeat = 0; S.switchStreak = 0; S.speed = 1; S.glitter = false;
+    S.progress = 0; S.phase = 1; S.lastMove = null; S.repeat = 0; S.switchStreak = 0; S.speed = 1; S.glitter = false; S.glitters = [];
     S.base = MILK.slice(); S.add = null; S.blend = 0; S.fresh = true;
-    makeBubbles(); makeSparkles();
-    if (S.mode === 'challenge') addColor(Math.floor(Math.random() * SWATCHES.length), true);
+    makeBubbles(); makeSparkles(); updateGlitters();
   }
   function startGame(mode) {
     audioInit();
     Object.assign(S, { mode, paused: false, t: START_TIME, score: 0, progress: 0, phase: 1, lastMove: null, repeat: 0,
-      switchStreak: 0, speed: 1, glitter: false, slimes: 0, mixes: 0, bestCombo: 0, lastInput: performance.now() });
+      switchStreak: 0, speed: 1, glitter: false, glitters: [], charges: 0, mixedCount: 0, slimes: 0, mixes: 0, bestCombo: 0, lastInput: performance.now() });
     off.fill(0); vel.fill(0); c = { x: home.x, y: home.y }; gReset(); particles = [];
     Object.assign(S, { base: MILK.slice(), add: null, blend: 0, fresh: true, swirl: 0, swirlV: 0 });
     makeBubbles(); makeSparkles();
     $('menu').classList.add('hidden'); $('endScreen').classList.add('hidden'); $('idle').classList.add('hidden');
     $('timePill').style.visibility = mode === 'challenge' ? 'visible' : 'hidden';
     $('hud').querySelector('.pill').style.visibility = mode === 'challenge' ? 'visible' : 'hidden';
-    $('swatches').classList.toggle('hidden', mode !== 'chill');
-    updateSwatches(); updateHud();
-    if (mode === 'challenge') addColor(Math.floor(Math.random() * SWATCHES.length), true);
-    toast(mode === 'chill' ? 'Tap a color to add it, then mix!' : 'Mix the new color in!');
+    $('swatches').classList.remove('hidden'); $('glitters').classList.remove('hidden');
+    updateSwatches(); updateGlitters(); updateHud();
+    toast(mode === 'chill' ? 'Tap a color to add it, then mix!' : 'Add a color, then mix it in!');
   }
   function endGame() {
     S.mode = 'end'; stretchStop(); grab = null;
     $('finalScore').textContent = S.score;
     $('finalInfo').textContent = `${S.slimes} slime${S.slimes === 1 ? '' : 's'} finished, best variety streak ${S.bestCombo}. Leaderboard coming soon.`;
-    $('endScreen').classList.remove('hidden'); $('swatches').classList.add('hidden');
+    $('endScreen').classList.remove('hidden'); $('swatches').classList.add('hidden'); $('glitters').classList.add('hidden'); $('glitters').classList.add('hidden');
     sndChime([392, 330, 262]);
     setTilt('');
   }
-  function toMenu() { S.mode = 'menu'; stretchStop(); $('endScreen').classList.add('hidden'); $('menu').classList.remove('hidden'); $('swatches').classList.add('hidden'); setTilt(''); }
+  function toMenu() { S.mode = 'menu'; stretchStop(); $('endScreen').classList.add('hidden'); $('menu').classList.remove('hidden'); $('swatches').classList.add('hidden'); $('glitters').classList.add('hidden'); setTilt(''); }
 
   /* ---------- particles ---------- */
   function burst(x, y, n, glitter) {
@@ -426,6 +442,25 @@
         box.appendChild(d);
       });
     }
+  }
+
+  function updateGlitters() {
+    const box = $('glitters');
+    if (!box.children.length) {
+      GLITTERS.forEach(([name], k) => {
+        const d = document.createElement('div'); d.className = 'gl'; d.textContent = (k === 2 ? '🌈 ' : '✨ ') + name;
+        d.addEventListener('pointerdown', e => { e.stopPropagation(); addGlitter(k); });
+        box.appendChild(d);
+      });
+      const info = document.createElement('span'); info.id = 'glInfo'; box.appendChild(info);
+    }
+    const chal = S.mode === 'challenge';
+    GLITTERS.forEach(([, , cost], k) => {
+      const d = box.children[k];
+      d.classList.toggle('locked', chal && S.charges < cost);
+      d.classList.toggle('ready', chal && S.charges >= cost);
+    });
+    $('glInfo').textContent = chal ? (S.charges > 0 ? 'Glitter charges: ' + S.charges : '5 different moves = 1 charge') : '';
   }
 
   /* ---------- input ---------- */
@@ -591,11 +626,12 @@
     }
     // glitter inside
     if (S.glitter) {
-      sparkles.forEach(sp => {
+      sparkles.forEach((sp, si) => {
         const x = c.x + Math.cos(sp.a) * sp.d * R, y = c.y + Math.sin(sp.a) * sp.d * R;
         const tw = 0.4 + 0.6 * Math.abs(Math.sin(now / 300 + sp.p));
-        ctx2d.fillStyle = `rgba(255,255,255,${tw})`; ctx2d.save(); ctx2d.translate(x, y); ctx2d.rotate(sp.p);
-        ctx2d.fillRect(-sp.s, -sp.s * 0.35, sp.s * 2, sp.s * 0.7); ctx2d.fillRect(-sp.s * 0.35, -sp.s, sp.s * 0.7, sp.s * 2); ctx2d.restore();
+        const gk = S.glitters.length ? S.glitters[si % S.glitters.length] : 0, gc = GLITTERS[gk][1];
+        ctx2d.globalAlpha = tw; ctx2d.fillStyle = gc === 'rainbow' ? `hsl(${(now / 12 + si * 37) % 360},95%,68%)` : gc; ctx2d.save(); ctx2d.translate(x, y); ctx2d.rotate(sp.p);
+        ctx2d.fillRect(-sp.s, -sp.s * 0.35, sp.s * 2, sp.s * 0.7); ctx2d.fillRect(-sp.s * 0.35, -sp.s, sp.s * 0.7, sp.s * 2); ctx2d.restore(); ctx2d.globalAlpha = 1;
       });
     }
     // gloss
@@ -622,12 +658,12 @@
     if (!document.hidden) { step(dt); draw(now); updateHud(); }
     requestAnimationFrame(frame);
   }
-  resize(); makeBubbles(); makeSparkles(); updateSwatches();
+  resize(); makeBubbles(); makeSparkles(); updateSwatches(); updateGlitters();
   $('timePill').style.visibility = 'hidden'; $('hud').querySelector('.pill').style.visibility = 'hidden';
   requestAnimationFrame(frame);
 
   // test hook (harmless in production; used by automated tests)
-  window.__slime = { S, off, vel, registerMove, step, startGame, addColor, slimeColor, mixColors, colorName, get R() { return R; }, get home() { return home; } };
+  window.__slime = { S, off, vel, registerMove, step, startGame, addColor, addGlitter, slimeColor, mixColors, colorName, get R() { return R; }, get home() { return home; } };
 })();
 </script>
 </body>

@@ -49,3 +49,9 @@ Single `docs/index.html`, assets in `docs/assets`, hosted free first (GitHub Pag
 - Challenge: each new slime starts with a random colour to mix in. When fully mixed a toast names the colour.
 - Tests: 27 headless checks pass (7 new for colour). Not tested on a real phone yet.
 - Idea: colour combos as collectibles (name list), Magnific art for textures and glitters.
+
+## Challenge colours and glitter (v0.3, 20 Nov 2026)
+- Colour and glitter buttons now show in BOTH modes. Challenge no longer auto-adds a random colour: you choose.
+- Challenge scoring: every move scores, a fully mixed colour = +40, 5 different moves in a row = 1 glitter charge.
+- Glitter is a button you tap: Silver (1 charge), Gold (1 charge), Rainbow (2 charges, rare). Each charge used = +50 points, and a use gives +3 s (capped at 60 s). Chill: glitter free.
+- Menu now explains both modes. 33 headless checks pass. Not tested on a real phone.
