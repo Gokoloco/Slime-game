@@ -114,6 +114,33 @@ with sync_playwright() as p:
     check("idle pauses timer", page.evaluate("__slime.S.paused"))
     t_a = page.evaluate("__slime.S.t"); page.wait_for_timeout(400); t_b = page.evaluate("__slime.S.t")
     check("timer frozen while paused", abs(t_a - t_b) < 1e-6, (t_a, t_b))
+    # ---- colour mixing
+    page.evaluate("__slime.startGame('chill')")
+    check("new slime starts as plain milky base", page.evaluate("__slime.S.base") == [243, 238, 252] and page.evaluate("__slime.S.add") is None)
+    page.evaluate("__slime.addColor(1, true)")   # Sunny (yellow)
+    c0 = page.evaluate("__slime.slimeColor()")
+    check("added colour does NOT change the slime right away", c0 == [243, 238, 252], c0)
+    for m in ['R','L','V','R','L','V','R','L','V','R','L','V','R','L','V','R']: page.evaluate(f"__slime.registerMove('{m}')")
+    yellow = page.evaluate("__slime.S.base")
+    check("after mixing, slime has taken the colour (yellow)", page.evaluate("__slime.colorName(__slime.S.base)").endswith("Yellow"), page.evaluate("__slime.colorName(__slime.S.base)"))
+    page.evaluate("__slime.addColor(0, true)")   # Red on yellow
+    mid_hues = []
+    for m in ['R','L','V','R','L','V']:
+        page.evaluate(f"__slime.registerMove('{m}')"); mid_hues.append(page.evaluate("__slime.slimeColor()"))
+    check("colour shifts gradually while mixing (not instant)", mid_hues[0] != mid_hues[-1] and page.evaluate("__slime.S.add") is not None, mid_hues[0])
+    page.screenshot(path="/tmp/shots/mixing_mid.png")
+    for m in ['R','L','V','R','L','V','R','L','V','R']: page.evaluate(f"__slime.registerMove('{m}')")
+    nm = page.evaluate("__slime.colorName(__slime.S.base)")
+    check("red + yellow = orange", "Orange" in nm, nm)
+    page.evaluate("__slime.startGame('chill'); __slime.addColor(2, true)")  # blue then yellow = green
+    for m in ['R','L','V']*6: page.evaluate(f"__slime.registerMove('{m}')")
+    page.evaluate("__slime.addColor(1, true)")
+    for m in ['R','L','V']*6: page.evaluate(f"__slime.registerMove('{m}')")
+    nm2 = page.evaluate("__slime.colorName(__slime.S.base)")
+    check("blue + yellow = green (not grey)", any(k in nm2 for k in ("Green", "Lime", "Teal")), nm2)
+    page.evaluate("__slime.startGame('challenge')")
+    check("challenge starts with a colour to mix in", page.evaluate("__slime.S.add") is not None)
+    page.evaluate("__slime.S.lastInput = performance.now()")
     check("no console/page errors", len(errors) == 0, errors[:3])
     b.close()
 

@@ -40,3 +40,12 @@ Single `docs/index.html`, assets in `docs/assets`, hosted free first (GitHub Pag
 - [ ] Leaderboard (Supabase, own table)
 - [ ] Real-phone test, then publish after approval
 - [ ] Name, trademark and privacy page (before launch)
+
+
+## Colour mixing (v0.2, 20 Nov 2026)
+- Every slime starts as plain milky base. Tapping a swatch ADDS a colour: it appears as swirling streaks and only blends in slowly while you mix (blend +0.07 x speed per move, about 14 good moves).
+- Blend is paint-like (hue wheel): red + yellow = orange, blue + yellow = green. First colour on the milky base is strong (85%), later colours are half-half (50%).
+- A half-mixed colour is folded in if you add another one before it finished.
+- Challenge: each new slime starts with a random colour to mix in. When fully mixed a toast names the colour.
+- Tests: 27 headless checks pass (7 new for colour). Not tested on a real phone yet.
+- Idea: colour combos as collectibles (name list), Magnific art for textures and glitters.

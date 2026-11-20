@@ -105,16 +105,18 @@
   const START_TIME = 45, MAX_TIME = 60, GLITTER_BONUS_TIME = 3, LOW_TIME = 10, IDLE_PAUSE = 6;
   const N = 72;                       // points around the slime
   const PHASE_NAMES = ['', 'Phase 1: Gluey', 'Phase 2: Stringy', 'Phase 3: Smooth'];
+  const MILK = [243, 238, 252];       // every slime starts as plain milky base; colors are ADDED and mixed in
   const SWATCHES = [
-    ['Pink',  '#ff7eb6'], ['Sky', '#6ec6ff'], ['Lilac', '#b69cff'],
-    ['Mint',  '#6fe3b8'], ['Sunny', '#ffd95e'], ['Milk', '#f3eefc']
+    ['Red',  '#ff4d63'], ['Sunny', '#ffd23f'], ['Sky', '#3fa9ff'],
+    ['Pink', '#ff7eb6'], ['Mint', '#52d6a0'], ['Lilac', '#b08cff']
   ];
+  const BLEND_PER_MOVE = 0.07;        // blend 0..1: about 14 good moves to fully mix a new color
 
   /* ---------- state ---------- */
   const S = {
     mode: 'menu', paused: false, t: START_TIME, score: 0, progress: 0, phase: 1,
     lastMove: null, repeat: 0, switchStreak: 0, speed: 1, lastMoveAt: 0,
-    glitter: false, slimes: 0, color: 0, fx: true, snd: true, lastInput: 0,
+    glitter: false, slimes: 0, base: MILK.slice(), add: null, addW: 0.5, blend: 0, swirl: 0, swirlV: 0, fresh: true, fx: true, snd: true, lastInput: 0,
     done: false, mixes: 0, bestCombo: 0
   };
   let W = 0, H = 0, R = 100, home = { x: 0, y: 0 }, c = { x: 0, y: 0 };
@@ -204,6 +206,42 @@
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   function hexToRgb(h) { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; }
   function mix(a, b, t) { return a.map((v, i) => Math.round(v + (b[i] - v) * t)); }
+  function toHsl([r, g, b]) {
+    r /= 255; g /= 255; b /= 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+    let h = 0, s = 0;
+    if (d > 1e-6) {
+      s = d / (1 - Math.abs(2 * l - 1));
+      h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      h = (h * 60 + 360) % 360;
+    }
+    return [h, s, l];
+  }
+  function fromHsl([h, s, l]) {
+    const c1 = (1 - Math.abs(2 * l - 1)) * s, x = c1 * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c1 / 2;
+    const [r, g, b] = h < 60 ? [c1, x, 0] : h < 120 ? [x, c1, 0] : h < 180 ? [0, c1, x] : h < 240 ? [0, x, c1] : h < 300 ? [x, 0, c1] : [c1, 0, x];
+    return [r + m, g + m, b + m].map(v => Math.round(clamp(v, 0, 1) * 255));
+  }
+  // paint-like mixing: hues blend around the colour wheel (red + yellow = orange, blue + yellow = green),
+  // plain RGB averaging would turn blue + yellow grey. Washed-out colours count less for the hue.
+  function mixColors(a, b, t) {
+    if (t <= 0) return a.slice(); if (t >= 1) return b.slice();
+    const A = toHsl(a), B = toHsl(b), wa = (1 - t) * A[1], wb = t * B[1];
+    let h = A[0];
+    const vx = Math.cos(A[0] * Math.PI / 180) * wa + Math.cos(B[0] * Math.PI / 180) * wb;
+    const vy = Math.sin(A[0] * Math.PI / 180) * wa + Math.sin(B[0] * Math.PI / 180) * wb;
+    if (wa + wb < 1e-6) h = B[0]; else if (Math.hypot(vx, vy) < 1e-4) h = B[0];  // exact opposites: take the new colour
+    else h = (Math.atan2(vy, vx) * 180 / Math.PI + 360) % 360;
+    return fromHsl([h, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t]);
+  }
+  function colorName(rgb) {
+    const [h, s, l] = toHsl(rgb);
+    if (s < 0.2) return 'Milky white';
+    const names = [[15, 'Red'], [40, 'Orange'], [70, 'Yellow'], [95, 'Lime'], [165, 'Green'], [195, 'Teal'], [255, 'Blue'], [290, 'Purple'], [335, 'Pink'], [361, 'Red']];
+    const n = names.find(x => h < x[0])[1];
+    return (l > 0.8 ? 'Pastel ' : '') + n;
+  }
+  function slimeColor() { return S.add ? mixColors(S.base, S.add, S.addW * Math.min(1, S.blend)) : S.base; }
   const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
   const rgba = (a, al) => `rgba(${a[0]},${a[1]},${a[2]},${al})`;
 
@@ -268,6 +306,12 @@
     const ph = Math.random() * TAU;
     for (let i = 0; i < N; i++) vel[i] += (type === 'V' ? -0.5 + Math.sin(ang[i] * 2 + ph) * 0.4 : Math.sin(ang[i] * 2 + ph)) * kick;
     popBadge(`${MOVE_LABEL[type]}${S.mode === 'challenge' ? ' +' + pts : ''}${S.switchStreak >= 2 ? '  x' + mult.toFixed(2) : ''}`, S.repeat > 1);
+    // colour blending: a freshly added colour mixes in slowly, move by move
+    S.swirlV += (type === 'R' ? 0.28 : type === 'L' ? -0.28 : 0.16) * (0.5 + S.speed);
+    if (S.add) {
+      S.blend = Math.min(1, S.blend + BLEND_PER_MOVE * S.speed);
+      if (S.blend >= 1) finishBlend();
+    }
     // progress
     if (S.progress < 100) {
       S.progress = Math.min(100, S.progress + 3.2 * S.speed);
@@ -277,6 +321,26 @@
     }
     // glitter: 5 different moves in a row
     if (S.switchStreak > 0 && S.switchStreak % 5 === 0) glitterUnlock();
+  }
+  function finishBlend() {
+    S.base = mixColors(S.base, S.add, S.addW); S.add = null; S.blend = 0; S.fresh = false;
+    burst(home.x, home.y, 18, true);
+    sndChime([659, 784]);
+    toast('Color mixed: ' + colorName(S.base));
+  }
+  // add a colour on top of the slime; it does NOT change the slime right away, it has to be mixed in
+  function addColor(i, silent) {
+    if (S.mode !== 'chill' && S.mode !== 'challenge') return;
+    if (S.add) { S.base = slimeColor(); }           // fold a half-mixed colour in before the next one drops
+    S.add = hexToRgb(SWATCHES[i][1]); S.blend = 0;
+    S.addW = S.fresh ? 0.85 : 0.5;                  // first colour on plain base is strong, later ones are half-half
+    dropBurst(S.add);
+    if (!silent) { sndSquish(1); toast(SWATCHES[i][0] + ' added. Now mix it in!'); }
+  }
+  function dropBurst(col) {
+    const rgb = `rgb(${col[0]},${col[1]},${col[2]})`;
+    for (let i = 0; i < 16; i++) particles.push({ x: home.x + (Math.random() - 0.5) * R * 0.8, y: home.y - R * 1.5 - Math.random() * R * 0.4,
+      vx: (Math.random() - 0.5) * 1.5, vy: 3 + Math.random() * 4, life: 1, size: 3 + Math.random() * 5, col: rgb });
   }
   function glitterUnlock() {
     S.glitter = true;
@@ -298,20 +362,24 @@
   }
   function newSlime() {
     S.progress = 0; S.phase = 1; S.lastMove = null; S.repeat = 0; S.switchStreak = 0; S.speed = 1; S.glitter = false;
-    S.color = (S.color + 1 + Math.floor(Math.random() * 4)) % SWATCHES.length;
-    makeBubbles(); makeSparkles(); updateSwatches();
+    S.base = MILK.slice(); S.add = null; S.blend = 0; S.fresh = true;
+    makeBubbles(); makeSparkles();
+    if (S.mode === 'challenge') addColor(Math.floor(Math.random() * SWATCHES.length), true);
   }
   function startGame(mode) {
     audioInit();
     Object.assign(S, { mode, paused: false, t: START_TIME, score: 0, progress: 0, phase: 1, lastMove: null, repeat: 0,
       switchStreak: 0, speed: 1, glitter: false, slimes: 0, mixes: 0, bestCombo: 0, lastInput: performance.now() });
     off.fill(0); vel.fill(0); c = { x: home.x, y: home.y }; gReset(); particles = [];
+    Object.assign(S, { base: MILK.slice(), add: null, blend: 0, fresh: true, swirl: 0, swirlV: 0 });
     makeBubbles(); makeSparkles();
     $('menu').classList.add('hidden'); $('endScreen').classList.add('hidden'); $('idle').classList.add('hidden');
     $('timePill').style.visibility = mode === 'challenge' ? 'visible' : 'hidden';
     $('hud').querySelector('.pill').style.visibility = mode === 'challenge' ? 'visible' : 'hidden';
     $('swatches').classList.toggle('hidden', mode !== 'chill');
     updateSwatches(); updateHud();
+    if (mode === 'challenge') addColor(Math.floor(Math.random() * SWATCHES.length), true);
+    toast(mode === 'chill' ? 'Tap a color to add it, then mix!' : 'Mix the new color in!');
   }
   function endGame() {
     S.mode = 'end'; stretchStop(); grab = null;
@@ -354,11 +422,10 @@
     if (!box.children.length) {
       SWATCHES.forEach(([name, col], i) => {
         const d = document.createElement('div'); d.className = 'sw'; d.style.background = col; d.title = name;
-        d.addEventListener('pointerdown', e => { e.stopPropagation(); S.color = i; updateSwatches(); });
+        d.addEventListener('pointerdown', e => { e.stopPropagation(); addColor(i); });
         box.appendChild(d);
       });
     }
-    [...box.children].forEach((d, i) => d.classList.toggle('sel', i === S.color));
   }
 
   /* ---------- input ---------- */
@@ -440,6 +507,7 @@
     const f = dt * 60, now = performance.now();
     const n = Math.max(1, Math.ceil(f - 1e-6));
     for (let j = 0; j < n; j++) physics(f / n);
+    S.swirl += S.swirlV * f; S.swirlV *= Math.pow(0.95, f);   // colour streaks swirl with your moves
     // particles
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i]; p.x += p.vx * f; p.y += p.vy * f; p.vy += 0.18 * f; p.life -= 0.018 * f;
@@ -472,7 +540,7 @@
     ctx2d.fillStyle = 'rgba(0,0,0,.18)';
     ctx2d.beginPath(); ctx2d.ellipse(c.x, home.y + R * 1.12, R * 1.05, R * 0.18, 0, 0, TAU); ctx2d.fill();
 
-    const base = hexToRgb(SWATCHES[S.color][1]);
+    const base = slimeColor();
     const dark = mix(base, [40, 20, 80], 0.45), light = mix(base, [255, 255, 255], 0.6);
     const stiff = S.speed < 0.6;
     const body = stiff ? mix(base, [150, 150, 160], 0.25) : base;
@@ -497,6 +565,17 @@
     ctx2d.lineWidth = 1.5; ctx2d.strokeStyle = 'rgba(255,255,255,.55)'; ctx2d.stroke();
 
     ctx2d.save(); path(); ctx2d.clip();
+    // a freshly added colour: streaks that swirl around and fade as they get mixed in
+    if (S.add) {
+      const k = 1 - Math.min(1, S.blend), col = S.add;
+      for (let i = 0; i < 5; i++) {
+        const a = S.swirl * (1 + i * 0.15) + i * TAU / 5, d = R * (0.12 + 0.5 * k) * (0.6 + 0.4 * ((i * 37) % 5) / 4);
+        const x = c.x + Math.cos(a) * d, y = c.y + Math.sin(a) * d * 0.85, r = R * (0.2 + 0.28 * k);
+        const gg = ctx2d.createRadialGradient(x, y, 0, x, y, r);
+        gg.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},${0.85 * k})`); gg.addColorStop(1, `rgba(${col[0]},${col[1]},${col[2]},0)`);
+        ctx2d.fillStyle = gg; ctx2d.beginPath(); ctx2d.arc(x, y, r, 0, TAU); ctx2d.fill();
+      }
+    }
     // phase 1: bubbles inside
     if (S.phase === 1) {
       bubbles.forEach(b => {
@@ -548,7 +627,7 @@
   requestAnimationFrame(frame);
 
   // test hook (harmless in production; used by automated tests)
-  window.__slime = { S, off, vel, registerMove, step, startGame, get R() { return R; }, get home() { return home; } };
+  window.__slime = { S, off, vel, registerMove, step, startGame, addColor, slimeColor, mixColors, colorName, get R() { return R; }, get home() { return home; } };
 })();
 </script>
 </body>
